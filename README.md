@@ -36,6 +36,8 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
   Áreas também não têm vãos aleatórios.
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
   Ao engordar, a parede para ao encostar em outro corredor, parede ou área (Alt atravessa).
+  Se mesmo assim dois corredores se sobrepõem, o mais novo encosta no mais antigo: a parede dele segue a face
+  da parede do outro, sem entrar (uma ramificação faz o mesmo com o pai, fora da porta).
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,
   decoração) e conecta as pontas mais próximas ao primeiro selecionado. Ctrl+Shift+G desagrupa.
 - **Regras procedurais** por objeto: semente, chance e tamanho de vãos (portas/ruínas), variação de altura,

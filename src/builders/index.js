@@ -105,11 +105,13 @@ function buildCorridor(o, ctx) {
   const trim = (end, key) => J.trims[end]?.[key] || 0;
   // Emendas: perto da ponta a largura converge para a largura comum da emenda
   const D = Math.min(3, L * 0.45);
-  const halfS = (p, side) => {
+  const halfS = (p, side, f) => {
     let h = halfAt(o, p.ctrl, side);
     const js = joints.start, je = joints.end;
     if (js) h = lerp(h, side > 0 ? js.hl : js.hr, smoothstep(Math.max(0, 1 - p.s / D)));
     if (je) h = lerp(h, side > 0 ? je.hl : je.hr, smoothstep(Math.max(0, 1 - (L - p.s) / D)));
+    // encosta no vizinho em vez de entrar nele
+    if (J.clamp && f) h = Math.min(h, J.clamp(p, f, side));
     return h;
   };
   // ... e a normal na ponta é a mesma dos dois corredores (bissetriz)
@@ -131,8 +133,8 @@ function buildCorridor(o, ctx) {
   const samples = closed ? raw : trimRange(raw, trim('start', 'floor'), L - trim('end', 'floor'));
   if (samples.length < 2) return group;
   const frames = jointFrames(samples, computeFrames(samples, closed));
-  const hl = (i) => halfS(samples[i], 1);
-  const hr = (i) => halfS(samples[i], -1);
+  const hl = (i) => halfS(samples[i], 1, frames[i]);
+  const hr = (i) => halfS(samples[i], -1, frames[i]);
   // curvas mais fechadas que a largura: o lado de dentro não pode dobrar sobre si
   const left = pinEnds(untangle(offsetPoints(samples, frames, hl), { keepLength: true, ref: samples }), 1, 'floorPt');
   const right = pinEnds(untangle(offsetPoints(samples, frames, (i) => -hr(i)), { keepLength: true, ref: samples }), -1, 'floorPt');
@@ -161,7 +163,7 @@ function buildCorridor(o, ctx) {
   const proc = { ...o.proc, gapChance: 0 };
   for (const side of sides) {
     if (wallSamples.length < 2) break;
-    const center = untangle(pinEnds(offsetPoints(wallSamples, wallFrames, (i) => side * (halfS(wallSamples[i], side) + W.thickness / 2)), side, 'wallPt'), { ref: wallSamples });
+    const center = untangle(pinEnds(offsetPoints(wallSamples, wallFrames, (i) => side * (halfS(wallSamples[i], side, wallFrames[i]) + W.thickness / 2)), side, 'wallPt'), { ref: wallSamples });
     const cuts = J.cuts.filter((c) => c.side === side).map((c) => ({ s0: c.s0 ?? c.s - c.half, s1: c.s1 ?? c.s + c.half, c }));
     group.add(buildWallLine(center, {
       height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,

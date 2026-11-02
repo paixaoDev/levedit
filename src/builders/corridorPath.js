@@ -147,6 +147,17 @@ export function wrapCut(c, total) {
   return [{ ...c, s0, s1: total }, { ...c, s0: 0, s1: s1 - total }];
 }
 
+/** Ponto dentro do corredor o (até a linha a `extra` além da borda do piso), longe das pontas. */
+function insideCorridor(o, sm, pt, extra) {
+  const c = closestOnPolyline(sm, pt, o.closed);
+  if (!c) return false;
+  const L = sm[sm.length - 1].s;
+  if (!o.closed && (c.s < 1e-3 || c.s > L - 1e-3)) return false;
+  const ctrl = sm[c.i].ctrl + ((sm[(c.i + 1) % sm.length].ctrl ?? sm[c.i].ctrl) - sm[c.i].ctrl) * c.f;
+  const side = (pt.x - c.x) * c.tz - (pt.z - c.z) * c.tx >= 0 ? 1 : -1; // normal esquerda = (tz, -tx)
+  return c.d < halfAt(o, ctrl, side) + extra - 0.01;
+}
+
 /**
  * Liga a ponta `end` do corredor `b` a um "pai" P (corredor ou área), dado por
  * linhas paralelas à parede dele: edge (piso, levemente para dentro), inner
@@ -160,7 +171,7 @@ function connectEnd(info, b, end, ei, fb, P) {
   const thB = b.walls.thickness;
   const Lb = sb[sb.length - 1].s;
   const reach = (P.depth + P.th + 2) / P.sinA + hb + 2 + (P.area ? Lb : 0);
-  const trim = { floor: 0, walls: 0, style, sides: {} };
+  const trim = { floor: 0, walls: 0, style, sides: {}, parent: P.id };
   const fallbackFloor = Math.max(0, (P.depth - 0.02) / P.sinA);
   const fallbackWalls = (P.depth + (style === 'none' ? 0 : P.th / 2)) / P.sinA;
   const faces = [];
@@ -181,27 +192,28 @@ function connectEnd(info, b, end, ei, fb, P) {
   trim.floor = Math.max(trim.sides[1].floor, trim.sides[-1].floor);
   trim.walls = Math.max(trim.sides[1].walls, trim.sides[-1].walls);
   info.get(b.id).trims[end] = trim;
-  if (style === 'none') return;
-  let s0, s1;
-  if (faces.length === 2) {
-    let [p, q] = faces;
-    if (P.closed && P.total) {
-      // na linha fechada, aproxima q de p (pode ter dado a volta)
-      const mp = (p[0] + p[1]) / 2;
-      q = q.map((v) => v + Math.round((mp - v) / P.total) * P.total);
+  if (style !== 'none') {
+    let s0, s1;
+    if (faces.length === 2) {
+      let [p, q] = faces;
+      if (P.closed && P.total) {
+        // na linha fechada, aproxima q de p (pode ter dado a volta)
+        const mp = (p[0] + p[1]) / 2;
+        q = q.map((v) => v + Math.round((mp - v) / P.total) * P.total);
+      }
+      if ((p[0] + p[1]) / 2 > (q[0] + q[1]) / 2) [p, q] = [q, p];
+      // a parede de P vai até onde a face de B sai da faixa (sem fresta)
+      s0 = Math.max(p[0], p[1]);
+      s1 = Math.min(q[0], q[1]);
+      if (s1 - s0 < 0.2) { const m = (s0 + s1) / 2; s0 = m - 0.1; s1 = m + 0.1; }
+    } else {
+      s0 = P.s - hb / P.sinA; s1 = P.s + hb / P.sinA;
     }
-    if ((p[0] + p[1]) / 2 > (q[0] + q[1]) / 2) [p, q] = [q, p];
-    // a parede de P vai até onde a face de B sai da faixa (sem fresta)
-    s0 = Math.max(p[0], p[1]);
-    s1 = Math.min(q[0], q[1]);
-    if (s1 - s0 < 0.2) { const m = (s0 + s1) / 2; s0 = m - 0.1; s1 = m + 0.1; }
-  } else {
-    s0 = P.s - hb / P.sinA; s1 = P.s + hb / P.sinA;
+    info.get(P.id).cuts.push({
+      side: P.side, s0, s1, s: (s0 + s1) / 2, half: (s1 - s0) / 2, style, from: b.id, y: P.y,
+      wallH: P.wallH, height: Math.min(b.walls.height, P.wallH),
+    });
   }
-  info.get(P.id).cuts.push({
-    side: P.side, s0, s1, s: (s0 + s1) / 2, half: (s1 - s0) / 2, style, from: b.id, y: P.y,
-    wallH: P.wallH, height: Math.min(b.walls.height, P.wallH),
-  });
 }
 
 /** Porta entre duas áreas cujas paredes correm juntas (encostadas). */
@@ -381,6 +393,57 @@ export function computeJunctions(ctx) {
   // ---- áreas encostadas: porta no meio de cada trecho de parede compartilhado
   for (let i = 0; i < areas.length; i++) {
     for (let k = i + 1; k < areas.length; k++) sharedDoors(info, areas[i], areas[k]);
+  }
+
+  // ---- quem invade encosta: cada corredor não entra nos corredores mais antigos
+  // (e no pai, longe da porta) nem em áreas que não são o destino dele. A meia-largura
+  // de cada amostra é limitada para a face externa da parede parar rente à do outro.
+  const order = new Map(ctx.doc.objects.map((o, i) => [o.id, i]));
+  for (const X of corridors) {
+    const obst = [];
+    const ends = X.closed ? [] : [X.points[0], X.points[X.points.length - 1]];
+    const xLinks = Object.values(X.links || {}).filter(Boolean).map((l) => l.id);
+    const y0 = ctx.levelY(X.levelId), y1 = ctx.levelY(X.endLevelId || X.levelId);
+    const sameLevel = (a, b) => Math.min(Math.abs(a - y0), Math.abs(a - y1), Math.abs(b - y0), Math.abs(b - y1)) < 1;
+    const trimsX = info.get(X.id).trims;
+    for (const Y of corridors) {
+      if (Y.id === X.id) continue;
+      if (!sameLevel(ctx.levelY(Y.levelId), ctx.levelY(Y.endLevelId || Y.levelId))) continue;
+      if (Object.values(Y.links || {}).some((l) => l?.id === X.id)) continue; // filho de X
+      const isParent = xLinks.includes(Y.id) || Object.entries(trimsX).some(([, t]) => t?.parent === Y.id);
+      if (!isParent && order.get(Y.id) > order.get(X.id)) continue; // o mais novo é quem encosta
+      if (!Y.closed && ends.some((p) => [Y.points[0], Y.points[Y.points.length - 1]].some((q) => Math.hypot(p.x - q.x, p.z - q.z) < 0.05))) continue; // emenda
+      const sm = paths.get(Y.id), fr = framesOf(Y);
+      obst.push({
+        id: Y.id, parent: isParent,
+        lines: [1, -1].map((sd) => ({ pts: sideLine(Y, sm, fr, sd, (sd > 0 ? Y.walls.left : Y.walls.right) ? Y.walls.thickness : 0), closed: Y.closed })),
+        inside: (pt) => insideCorridor(Y, sm, pt, Y.walls.thickness),
+      });
+    }
+    for (const { o: A, ol } of areas) {
+      if (!sameLevel(ol.y, ol.y)) continue;
+      if (Object.values(trimsX).some((t) => t?.parent === A.id)) continue; // X abre porta nesta área
+      const poly = ol.samples;
+      obst.push({ id: A.id, lines: [{ pts: poly, closed: true }], inside: (pt) => insidePoly(poly, pt) });
+    }
+    if (!obst.length) continue;
+    const L = paths.get(X.id).at(-1).s;
+    info.get(X.id).clamp = (p, f, side) => {
+      const th = (side > 0 ? X.walls.left : X.walls.right) ? X.walls.thickness : 0;
+      let best = Infinity;
+      for (const ob of obst) {
+        if (ob.parent) {
+          // perto da porta para o pai a parede já termina certinho: não mexe
+          const near = Object.entries(trimsX).some(([end, t]) => t?.parent === ob.id
+            && (end === 'start' ? p.s : L - p.s) < (t.sides?.[side]?.walls ?? t.walls) + 1.5);
+          if (near) continue;
+        }
+        if (ob.inside(p)) continue; // o eixo já está dentro do outro: não dá para encostar
+        const t = rayHit(p, { x: f.nx * side, z: f.nz * side }, ob.lines, 0.01);
+        if (Number.isFinite(t)) best = Math.min(best, t / (f.miter || 1) - th - 0.02);
+      }
+      return Math.max(0.3, best);
+    };
   }
   return info;
 }
