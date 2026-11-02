@@ -2,7 +2,9 @@
 // área), colocação (assets, agentes, escadas) e alças de pontos de controle.
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
-import { buildObject } from '../builders/index.js';
+import { buildObject, corridorSamples } from '../builders/index.js';
+import { nodeHalf } from '../builders/corridorPath.js';
+import { computeFrames, closestOnPolyline } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
@@ -10,8 +12,8 @@ const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector']);
 
 export const TOOL_INFO = {
-  select: { label: 'Selecionar', key: 'V', hint: 'Clique para selecionar · arraste para mover · arraste pontos/meios para editar a curva · botão direito no ponto remove' },
-  corridor: { label: 'Corredor', key: 'C', hint: 'Clique para adicionar pontos · Enter/duplo clique/botão direito finaliza · Backspace desfaz ponto · Esc cancela' },
+  select: { label: 'Selecionar', key: 'V', hint: 'Clique seleciona (Shift soma) · arraste move · quadrados = nós, losangos = novo nó, bolinhas = largura do nó (Shift: os dois lados) · Ctrl+G agrupa' },
+  corridor: { label: 'Corredor', key: 'C', hint: 'Clique para adicionar pontos (comece sobre outro corredor para ramificar com porta) · Enter/duplo clique finaliza · Backspace desfaz · Esc cancela' },
   wall: { label: 'Parede', key: 'W', hint: 'Clique para adicionar pontos da parede · Enter finaliza · clique no primeiro ponto fecha' },
   area: { label: 'Área', key: 'A', hint: 'Desenhe o contorno da sala/praça · clique no primeiro ponto ou Enter para fechar' },
   connector: { label: 'Escada/Rampa', key: 'S', hint: 'Clique para posicionar · R gira · liga o nível ativo ao nível de cima' },
@@ -92,11 +94,23 @@ export class Tools extends EventTarget {
       if (h) {
         this._setControls(false);
         const o = this.store.get(h.id);
+        if (h.kind === 'edge') {
+          this.drag = { kind: 'edge', id: h.id, index: h.index, side: h.side, y: h.pos.y, both: e.shiftKey, recorded: false };
+          return;
+        }
         if (h.kind === 'mid') {
           // insere um ponto no meio do segmento e começa a arrastar
           this.store.mutate((d) => {
             const obj = d.objects.find((x) => x.id === h.id);
-            obj.points.splice(h.index + 1, 0, { x: h.pos.x, z: h.pos.z });
+            const n = obj.points.length;
+            const np = { x: h.pos.x, z: h.pos.z };
+            if (obj.type === 'corridor') {
+              const j = (h.index + 1) % n;
+              const a = obj.points[h.index], b = obj.points[j];
+              if (a.wl || b.wl) np.wl = (nodeHalf(obj, h.index, 1) + nodeHalf(obj, j, 1)) / 2;
+              if (a.wr || b.wr) np.wr = (nodeHalf(obj, h.index, -1) + nodeHalf(obj, j, -1)) / 2;
+            }
+            obj.points.splice(h.index + 1, 0, np);
           }, { ids: [h.id] });
           this.drag = { kind: 'point', id: h.id, index: h.index + 1, y: h.pos.y, recorded: true };
         } else if (e.altKey && o.points.length > (o.type === 'area' ? 3 : 2)) {
@@ -107,6 +121,10 @@ export class Tools extends EventTarget {
         return;
       }
       const hit = this.vp.pickObject(ndc);
+      if (hit && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+        this.store.select(hit.id, { add: true });
+        return;
+      }
       if (hit) {
         this.store.select(hit.id);
         const o = this.store.get(hit.id);
@@ -153,7 +171,7 @@ export class Tools extends EventTarget {
     if (this.drag) { this._doDrag(ndc, e); return; }
     if (this.tool === 'select') {
       const h = this._pickHandle(ndc);
-      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : 'grab') : 'default';
+      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : 'default';
       return;
     }
     const p = this._cursorPoint(ndc, e);
@@ -181,6 +199,12 @@ export class Tools extends EventTarget {
     if (this.tool === 'select') {
       const h = this._pickHandle(this.vp.ndc(e));
       if (h && h.kind === 'point') this._deletePoint(h.id, h.index);
+      else if (h && h.kind === 'edge') {
+        this.store.mutate((d) => {
+          const pt = d.objects.find((x) => x.id === h.id).points[h.index];
+          delete pt.wl; delete pt.wr;
+        }, { ids: [h.id] });
+      }
     } else if (this.tool !== 'select') {
       this.setTool('select');
     }
@@ -207,10 +231,14 @@ export class Tools extends EventTarget {
   _cursorPoint(ndc, e) {
     const p = this.vp.groundPoint(ndc, this.levelY);
     if (!p) return null;
-    return this.snapPoint(p, e?.altKey, null);
+    return this.snapPoint(p, e?.altKey, null, this.tool === 'corridor');
   }
 
-  snapPoint(p, noSnap, excludeId) {
+  /**
+   * Ímãs: extremidades de caminhos, eixo de corredores existentes (para
+   * ramificar um corredor a partir de outro) e grade.
+   */
+  snapPoint(p, noSnap, excludeId, branch = false) {
     const out = { x: p.x, z: p.z };
     if (noSnap) return out;
     // ímã nas extremidades de outros caminhos (para emendar corredores)
@@ -223,6 +251,22 @@ export class Tools extends EventTarget {
       }
     }
     if (best) return { x: best.x, z: best.z, snapped: true };
+    if (branch) {
+      const lv = this.levelY;
+      let bb = null;
+      for (const o of this.store.doc.objects) {
+        if (o.type !== 'corridor' || o.id === excludeId || o.points.length < 2) continue;
+        const sm = corridorSamples(o, this.vp.ctx).samples;
+        const c = closestOnPolyline(sm, p, o.closed);
+        if (!c || Math.abs(c.y - lv) > 1) continue;
+        const half = Math.max(nodeHalf(o, 0, 1), o.width / 2);
+        if (c.d < half && (!bb || c.d < bb.d)) bb = c;
+      }
+      if (bb) {
+        // grade ao longo do eixo para posições limpas
+        return { x: bb.x, z: bb.z, snapped: true, branch: true };
+      }
+    }
     const s = this.store.doc.settings;
     if (s.snap) { out.x = snap(p.x, s.gridSize / 2); out.z = snap(p.z, s.gridSize / 2); }
     return out;
@@ -236,10 +280,25 @@ export class Tools extends EventTarget {
     const record = !d.recorded;
     d.recorded = true;
     if (d.kind === 'point') {
-      const p = this.snapPoint(hit, e.altKey, d.id);
+      const cur = this.store.get(d.id);
+      const isEnd = cur && !cur.closed && (d.index === 0 || d.index === cur.points.length - 1);
+      const p = this.snapPoint(hit, e.altKey, d.id, cur?.type === 'corridor' && isEnd);
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
-        if (o?.points[d.index]) o.points[d.index] = { x: p.x, z: p.z };
+        if (o?.points[d.index]) o.points[d.index] = { ...o.points[d.index], x: p.x, z: p.z };
+      }, { ids: [d.id], record });
+    } else if (d.kind === 'edge') {
+      // largura do corredor neste nó (quina esquerda/direita)
+      const o = this.store.get(d.id);
+      const P = o.points[d.index];
+      const fr = computeFrames(o.points, o.closed)[d.index];
+      let w = ((hit.x - P.x) * fr.nx + (hit.z - P.z) * fr.nz) * d.side;
+      const st = this.store.doc.settings;
+      if (st.snap && !e.altKey) w = snap(w, 0.25);
+      w = Math.max(0.3, Math.min(40, w));
+      this.store.mutate((doc) => {
+        const pt = doc.objects.find((x) => x.id === d.id).points[d.index];
+        if (d.both || e.shiftKey) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
       }, { ids: [d.id], record });
     } else if (d.kind === 'move') {
       const s = this.store.doc.settings;
@@ -249,7 +308,7 @@ export class Tools extends EventTarget {
         if (!o) return;
         if (PATH_TYPES.has(o.type)) {
           if (s.snap && !e.altKey) { dx = snap(dx, s.gridSize / 2); dz = snap(dz, s.gridSize / 2); }
-          o.points = d.orig.map((p) => ({ x: p.x + dx, z: p.z + dz }));
+          o.points = d.orig.map((p) => ({ ...p, x: p.x + dx, z: p.z + dz }));
         } else {
           const step = s.snap && !e.altKey ? s.gridSize / 2 : 0;
           o.x = snap(d.orig.x + dx, step);
@@ -407,6 +466,27 @@ export class Tools extends EventTarget {
       const p = o.points[i];
       this._addHandle(this.handles, { x: p.x, y: yAt(i) + 0.05, z: p.z }, 'point', { id: o.id, index: i });
     }
+    if (o.type === 'corridor' && n >= 2) {
+      // alças de largura: quina esquerda e direita de cada nó
+      const fr = computeFrames(o.points, closed);
+      const seg = [];
+      for (let i = 0; i < n; i++) {
+        const p = o.points[i], y = yAt(i) + 0.05;
+        const ends = [];
+        for (const side of [1, -1]) {
+          const w = nodeHalf(o, i, side) * side;
+          const q = { x: p.x + fr[i].nx * w, y, z: p.z + fr[i].nz * w };
+          this._addHandle(this.handles, q, 'edge', { id: o.id, index: i, side });
+          ends.push(new THREE.Vector3(q.x, y + 0.01, q.z));
+        }
+        seg.push(ends[0], ends[1]);
+      }
+      const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg),
+        new THREE.LineBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, opacity: 0.7 }));
+      ls.renderOrder = 19;
+      ls.raycast = () => {};
+      this.handles.add(ls);
+    }
     const segs = closed ? n : n - 1;
     for (let i = 0; i < segs; i++) {
       const a = o.points[i], b = o.points[(i + 1) % n];
@@ -426,8 +506,8 @@ export class Tools extends EventTarget {
 
   _addHandle(parent, pos, kind, data = {}) {
     const isMid = kind === 'mid';
-    const geo = isMid ? HANDLE_GEO.mid : HANDLE_GEO.point;
-    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : HANDLE_MAT.point;
+    const geo = isMid ? HANDLE_GEO.mid : kind === 'edge' ? HANDLE_GEO.edge : HANDLE_GEO.point;
+    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : kind === 'edge' ? HANDLE_MAT.edgeHandle : HANDLE_MAT.point;
     const m = new THREE.Mesh(geo, mat);
     m.position.set(pos.x, pos.y, pos.z);
     m.renderOrder = 30;
@@ -447,9 +527,10 @@ export class Tools extends EventTarget {
     const hits = rc.intersectObjects(this.handles.children.filter((c) => c.userData.handle), false);
     if (!hits.length) return null;
     // pontos têm prioridade sobre meios
-    hits.sort((a, b) => (a.object.userData.handle === 'point' ? 0 : 1) - (b.object.userData.handle === 'point' ? 0 : 1));
+    const rank = { point: 0, edge: 1, mid: 2 };
+    hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
     const u = hits[0].object.userData;
-    return { kind: u.handle, id: u.id, index: u.index, pos: u.pos };
+    return { kind: u.handle, id: u.id, index: u.index, side: u.side, pos: u.pos };
   }
 
   _scaleHandles() {
@@ -466,6 +547,7 @@ export class Tools extends EventTarget {
 const HANDLE_GEO = {
   point: new THREE.BoxGeometry(1, 1, 1),
   mid: new THREE.OctahedronGeometry(0.55, 0),
+  edge: new THREE.SphereGeometry(0.42, 12, 8),
   _edges: new Map(),
   edges(g) {
     if (!this._edges.has(g)) this._edges.set(g, new THREE.EdgesGeometry(g));
@@ -476,5 +558,6 @@ const HANDLE_MAT = {
   point: new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }),
   mid: new THREE.MeshBasicMaterial({ color: 0xe8d9bf, depthTest: false, transparent: true }),
   draft: new THREE.MeshBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true }),
+  edgeHandle: new THREE.MeshBasicMaterial({ color: THEME.select, depthTest: false, transparent: true }),
   edge: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true }),
 };

@@ -5,16 +5,25 @@ import { floorGeometry, slabGeometry, wallGeometry, boxBetween, ribbon, sharedGe
 import { makeMesh } from '../render/materials.js';
 import { buildWallLine } from './walls.js';
 import { buildAssetParts, carParts } from './assets.js';
+import { corridorSamples, computeJunctions, halfAt } from './corridorPath.js';
+
+export { corridorSamples };
 import { rng, lerp, smoothstep, shade } from '../util.js';
 
 /** Contexto: elevação dos níveis. */
 export function makeContext(doc) {
   const levels = new Map(doc.levels.map((l) => [l.id, l]));
-  return {
+  const ctx = {
     doc,
     levels,
     levelY: (id) => levels.get(id)?.elevation ?? 0,
+    _junctions: null,
+    junctions() {
+      if (!this._junctions) this._junctions = computeJunctions(this);
+      return this._junctions;
+    },
   };
+  return ctx;
 }
 
 export function buildObject(obj, ctx) {
@@ -36,53 +45,51 @@ export function buildObject(obj, ctx) {
 
 // ---------------------------------------------------------------- caminhos
 
-/** Amostra o caminho e aplica o perfil de elevação (rampa ou degraus). */
-export function corridorSamples(o, ctx) {
-  const y0 = ctx.levelY(o.levelId);
-  const y1 = o.endLevelId ? ctx.levelY(o.endLevelId) : y0;
-  const stairs = o.rampStyle === 'stairs' && Math.abs(y1 - y0) > 1e-3;
-  let s = samplePath(o.points, { closed: o.closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
-  if (s.length < 2) return { samples: s, y0, y1 };
-  if (!stairs) {
-    for (const p of s) p.y = lerp(y0, y1, y1 === y0 ? 0 : smoothstep(p.u));
-    return { samples: s, y0, y1 };
-  }
-  // Degraus: insere fronteiras exatas de cada degrau ao longo do arco
-  const L = s[s.length - 1].s;
-  const rise = y1 - y0;
-  const N = Math.max(1, Math.round(Math.abs(rise) / Math.max(0.05, o.stepHeight || 0.25)));
-  const tread = L / N;
-  const stepY = (k) => y0 + (rise * k) / N;
-  const out = [];
-  const at = (sv) => {
-    let j = 1;
-    while (j < s.length - 1 && s[j].s < sv) j++;
-    const a = s[j - 1], b = s[j];
+/** Recorta amostras no intervalo de arco [s0, s1], interpolando as bordas. */
+function trimRange(samples, s0, s1) {
+  if (s0 <= 1e-4 && s1 >= samples[samples.length - 1].s - 1e-4) return samples;
+  const lerpP = (a, b, sv) => {
     const f = b.s - a.s > 1e-6 ? (sv - a.s) / (b.s - a.s) : 0;
-    return { x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), s: sv, u: sv / L };
+    return {
+      ...a, x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), y: lerp(a.y ?? 0, b.y ?? 0, f), s: sv,
+      u: lerp(a.u ?? 0, b.u ?? 0, f), ctrl: lerp(a.ctrl ?? 0, b.ctrl ?? 0, f),
+    };
   };
-  const marks = new Set(s.map((p) => +p.s.toFixed(4)));
-  for (let k = 1; k <= N; k++) marks.add(+(k * tread).toFixed(4));
-  const sorted = [...marks].sort((a, b) => a - b);
-  for (const sv of sorted) {
-    const k = Math.min(N, Math.floor((sv + 1e-4) / tread));
-    const p = at(Math.min(L, sv));
-    const isBoundary = k > 0 && Math.abs(sv - k * tread) < 2e-3;
-    if (isBoundary) out.push({ ...p, y: stepY(k - 1) });
-    out.push({ ...p, y: stepY(k) });
+  const out = [];
+  for (let i = 0; i < samples.length; i++) {
+    const p = samples[i];
+    const prev = samples[i - 1];
+    if (prev && prev.s < s0 && p.s > s0) out.push(lerpP(prev, p, s0));
+    if (p.s >= s0 && p.s <= s1) out.push(p);
+    if (prev && prev.s < s1 && p.s > s1) out.push(lerpP(prev, p, s1));
   }
-  return { samples: out, y0, y1, stepped: { y0, rise, step: Math.abs(rise) / N } };
+  return out;
+}
+
+/** Ponto interpolado por arco numa linha (para batentes de porta). */
+function pointAtS(line, sv) {
+  let j = 1;
+  while (j < line.length - 1 && line[j].s < sv) j++;
+  const a = line[j - 1], b = line[j];
+  const f = b.s - a.s > 1e-6 ? Math.max(0, Math.min(1, (sv - a.s) / (b.s - a.s))) : 0;
+  return { x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), y: lerp(a.y ?? 0, b.y ?? 0, f), s: sv };
 }
 
 function buildCorridor(o, ctx) {
   const group = new THREE.Group();
-  const { samples, stepped } = corridorSamples(o, ctx);
-  if (samples.length < 2) return group;
+  const { samples: raw, stepped } = corridorSamples(o, ctx);
+  if (raw.length < 2) return group;
   const closed = o.closed;
+  const J = ctx.junctions?.().get(o.id) || { cuts: [], trims: {} };
+  const L = raw[raw.length - 1].s;
+  const trim = (end, key) => J.trims[end]?.[key] || 0;
+  const samples = closed ? raw : trimRange(raw, trim('start', 'floor'), L - trim('end', 'floor'));
+  if (samples.length < 2) return group;
   const frames = computeFrames(samples, closed);
-  const half = o.width / 2;
-  const left = offsetPoints(samples, frames, half);
-  const right = offsetPoints(samples, frames, -half);
+  const hl = (i) => halfAt(o, samples[i].ctrl, 1);
+  const hr = (i) => halfAt(o, samples[i].ctrl, -1);
+  const left = offsetPoints(samples, frames, hl);
+  const right = offsetPoints(samples, frames, (i) => -hr(i));
 
   if (o.floor.enabled) {
     const fl = makeMesh(floorGeometry(left, right, o.floor.thickness, { closed }), o.floor.color, { threshold: 30 });
@@ -95,33 +102,60 @@ function buildCorridor(o, ctx) {
   if (W.left) sides.push(1);
   if (W.right) sides.push(-1);
   // Em degraus, as paredes seguem o perfil linear (topo liso) e descem até o degrau.
-  let wallSamples = samples, wallFrames = frames, extra = 0;
+  let wallBase = raw, extra = 0;
   if (stepped) {
-    wallSamples = samplePath(o.points, { closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
-    const L = wallSamples[wallSamples.length - 1].s || 1;
-    for (const p of wallSamples) p.y = stepped.y0 + (stepped.rise * p.s) / L - stepped.step;
-    wallFrames = computeFrames(wallSamples, closed);
+    wallBase = samplePath(o.points, { closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
+    const LL = wallBase[wallBase.length - 1].s || 1;
+    for (const p of wallBase) p.y = stepped.y0 + (stepped.rise * p.s) / LL - stepped.step;
     extra = stepped.step;
   }
+  const wallSamples = closed ? wallBase : trimRange(wallBase, trim('start', 'walls'), L - trim('end', 'walls'));
+  const wallFrames = computeFrames(wallSamples, closed);
+  // corredores não têm vãos aleatórios: aberturas só onde outro corredor sai
+  const proc = { ...o.proc, gapChance: 0 };
   for (const side of sides) {
-    const center = offsetPoints(wallSamples, wallFrames, side * (half + W.thickness / 2));
+    if (wallSamples.length < 2) break;
+    const center = offsetPoints(wallSamples, wallFrames, (i) => side * (halfAt(o, wallSamples[i].ctrl, side) + W.thickness / 2));
+    const cuts = J.cuts.filter((c) => c.side === side).map((c) => ({ s0: c.s - c.half, s1: c.s + c.half, c }));
     group.add(buildWallLine(center, {
-      height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc: o.proc, closed, seedOffset: side > 0 ? 1 : 2,
+      height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,
     }));
+    for (const { s0, s1, c } of cuts) {
+      if (c.style !== 'door') continue;
+      const a = pointAtS(center, s0), b = pointAtS(center, s1);
+      const y = Math.min(a.y, b.y);
+      const H = W.height + extra;
+      const doorH = Math.min(2.5, c.height - 0.2, H - 0.25);
+      const postW = 0.18;
+      const dx = b.x - a.x, dz = b.z - a.z, dl = Math.hypot(dx, dz) || 1;
+      const ux = dx / dl, uz = dz / dl;
+      const frameColor = shade(W.color, -0.18);
+      const post = (p, dir) => makeMesh(boxBetween(
+        { x: p.x + ux * dir * 0.0, z: p.z + uz * dir * 0.0 }, { x: p.x + ux * dir * postW, z: p.z + uz * dir * postW },
+        W.thickness + 0.12, y, doorH,
+      ), frameColor);
+      group.add(post(a, 1), post(b, -1));
+      if (H - doorH > 0.05) group.add(makeMesh(boxBetween(a, b, W.thickness, y + doorH, H - doorH), W.color));
+      group.add(makeMesh(boxBetween(a, b, W.thickness + 0.12, y + doorH - 0.12, 0.12), frameColor));
+    }
   }
   if (!closed) {
     const capW = (i) => {
-      const a = offsetPoints([samples[i]], [frames[i]], half + W.thickness)[0];
-      const b = offsetPoints([samples[i]], [frames[i]], -half - W.thickness)[0];
+      const a = offsetPoints([samples[i]], [frames[i]], hl(i) + W.thickness)[0];
+      const b = offsetPoints([samples[i]], [frames[i]], -hr(i) - W.thickness)[0];
       return makeMesh(boxBetween(a, b, W.thickness, samples[i].y, W.height), W.color);
     };
-    if (W.capStart) group.add(capW(0));
-    if (W.capEnd) group.add(capW(samples.length - 1));
+    if (W.capStart && !J.trims.start) group.add(capW(0));
+    if (W.capEnd && !J.trims.end) group.add(capW(samples.length - 1));
   }
 
+  const decoSides = o.deco.side === 'left' ? [1] : o.deco.side === 'right' ? [-1] : [1, -1];
   buildDecorations(group, samples, frames, o.deco, {
-    half, closed, wallHeight: W.height, wallThickness: W.thickness, wallColor: W.color,
-    sides: (o.deco.side === 'left' ? [1] : o.deco.side === 'right' ? [-1] : [1, -1]).map((side) => ({ side, edge: half, into: -1 })),
+    closed, wallHeight: W.height, wallThickness: W.thickness, wallColor: W.color,
+    sides: decoSides.map((side) => ({
+      side, into: -1, edge: (ctrl) => halfAt(o, ctrl, side),
+      cuts: J.cuts.filter((c) => c.side === side).map((c) => [c.s - c.half - 0.8, c.s + c.half + 0.8]),
+    })),
   });
   return group;
 }
@@ -178,6 +212,7 @@ function interp(samples, frames, sv, closed) {
   return {
     x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), y: lerp(a.y ?? 0, b.y ?? 0, f),
     nx: lerp(fa.nx, fb.nx, f), nz: lerp(fa.nz, fb.nz, f), tx: lerp(fa.tx, fb.tx, f), tz: lerp(fa.tz, fb.tz, f),
+    ctrl: lerp(a.ctrl ?? 0, b.ctrl ?? 0, f),
   };
 }
 
@@ -191,11 +226,12 @@ function buildDecorations(group, samples, frames, deco, opt) {
 
   // Faixas contínuas: calçada / cerca viva
   if (deco.type === 'sidewalk' || deco.type === 'hedge') {
-    for (const { side, edge, into } of opt.sides) {
+    for (const { side, edge: e0, into } of opt.sides) {
+      const edge = typeof e0 === 'function' ? (i) => e0(samples[i].ctrl) : () => e0;
       if (deco.type === 'sidewalk') {
-        const a = side * edge, b = side * (edge + into * inset * 2);
-        const outer = offsetPoints(samples, frames, a);
-        const inner = offsetPoints(samples, frames, b);
+        const a = side * edge(0), b = side * (edge(0) + into * inset * 2);
+        const outer = offsetPoints(samples, frames, (i) => side * edge(i));
+        const inner = offsetPoints(samples, frames, (i) => side * (edge(i) + into * inset * 2));
         const L2 = a > b ? outer : inner, R2 = a > b ? inner : outer;
         const yb = samples.map((p) => (p.y ?? 0) - 0.02);
         const yt = samples.map((p) => (p.y ?? 0) + 0.18);
@@ -203,7 +239,7 @@ function buildDecorations(group, samples, frames, deco, opt) {
         m.userData.floor = true;
         group.add(m);
       } else {
-        const c = offsetPoints(samples, frames, side * (edge + into * inset));
+        const c = offsetPoints(samples, frames, (i) => side * (edge(i) + into * inset));
         group.add(makeMesh(wallGeometry(c, 1.1, 0.7, { closed: opt.closed, caps: !opt.closed }), color, { threshold: 30 }));
       }
     }
@@ -211,9 +247,12 @@ function buildDecorations(group, samples, frames, deco, opt) {
   }
 
   const spacing = lerp(6, 1.1, Math.max(0, Math.min(1, deco.density)));
-  for (const { side, edge, into } of opt.sides) {
-    for (let sv = spacing * 0.5 + rnd() * spacing * 0.3; sv < (opt.closed ? L : totalL); sv += spacing * (0.75 + rnd() * 0.5)) {
+  for (const { side, edge: e0, into, cuts } of opt.sides) {
+    const s0 = samples[0].s;
+    for (let sv = s0 + spacing * 0.5 + rnd() * spacing * 0.3; sv < (opt.closed ? L : totalL); sv += spacing * (0.75 + rnd() * 0.5)) {
+      if (cuts?.some(([a, b]) => sv > a && sv < b)) continue;
       const p = interp(samples, frames, sv, opt.closed);
+      const edge = typeof e0 === 'function' ? e0(p.ctrl) : e0;
       const rot = Math.atan2(p.tx, p.tz);
       const off = deco.type === 'pillars' ? edge : edge + into * (inset + rnd() * inset * 0.3);
       const x = p.x + p.nx * side * off, z = p.z + p.nz * side * off;

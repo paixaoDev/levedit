@@ -157,7 +157,11 @@ export class Viewport {
       this.root.clear();
       for (const o of doc.objects) this._add(o);
     } else if (detail.ids) {
-      for (const id of detail.ids) {
+      // junções: mudar um corredor pode abrir/fechar portas nos outros
+      const ids = new Set(detail.ids);
+      const touchesCorridor = [...ids].some((id) => this.store.get(id)?.type === 'corridor' || (this.objects.get(id) && !this.store.get(id)));
+      if (touchesCorridor) for (const o of doc.objects) if (o.type === 'corridor') ids.add(o.id);
+      for (const id of ids) {
         const old = this.objects.get(id);
         if (old) { this.root.remove(old); this._dispose(old); this.objects.delete(id); }
         const o = this.store.get(id);
@@ -200,7 +204,7 @@ export class Viewport {
       const other = o.levelId !== active && !(o.type === 'corridor' && o.endLevelId === active)
         && !(o.type === 'connector' && (o.toLevelId === active || o.fromLevelId === active));
       g.visible = levelVisible && !(other && mode === 'hide');
-      const state = this.store.selection === id ? 'selected' : other && mode === 'ghost' ? 'ghost' : 'normal';
+      const state = this.store.isSelected(id) ? 'selected' : other && mode === 'ghost' ? 'ghost' : 'normal';
       applyVisualState(g, state);
       g.traverse((m) => { if (m.userData.editorOnly) m.visible = !this.playing; });
     }

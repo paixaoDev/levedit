@@ -45,6 +45,14 @@ export function buildWallLine(center, o) {
       }
     }
   }
+  // Aberturas fixas (junções com outros corredores): intervalos de arco [s0, s1]
+  if (o.cuts?.length) {
+    for (let k = 0; k < segs; k++) {
+      const a = pts[k], b = pts[(k + 1) % n];
+      const sa = a.s ?? k, sb = b.s ?? k + 1;
+      if (o.cuts.some((c) => sb > c.s0 && sa < c.s1)) gap[k] = true;
+    }
+  }
   const anyGap = gap.some(Boolean);
 
   if (o.mode === 'blocks') {
