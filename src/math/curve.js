@@ -185,3 +185,95 @@ export function signedArea(pts) {
   }
   return a / 2;
 }
+
+/**
+ * Cruzamentos entre duas polilinhas P e Q (XZ). Cada resultado traz o ponto e
+ * o arco interpolado nas duas (sP, sQ), usando o campo `s` dos pontos.
+ */
+export function polylineCrossings(P, Q, closedQ = false) {
+  const out = [];
+  const m = Q.length;
+  const qsegs = closedQ ? m : m - 1;
+  for (let i = 0; i < P.length - 1; i++) {
+    const a = P[i], b = P[i + 1];
+    const rx = b.x - a.x, rz = b.z - a.z;
+    for (let j = 0; j < qsegs; j++) {
+      const c = Q[j], d = Q[(j + 1) % m];
+      const qx = d.x - c.x, qz = d.z - c.z;
+      const den = rx * qz - rz * qx;
+      if (Math.abs(den) < 1e-12) continue;
+      const wx = c.x - a.x, wz = c.z - a.z;
+      const t = (wx * qz - wz * qx) / den;
+      const u = (wx * rz - wz * rx) / den;
+      if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) continue;
+      const sd = j + 1 < m ? d.s : (c.s ?? 0) + Math.hypot(qx, qz);
+      out.push({
+        x: a.x + rx * t, z: a.z + rz * t, y: (a.y ?? 0) + ((b.y ?? 0) - (a.y ?? 0)) * t,
+        sP: (a.s ?? i) + ((b.s ?? i + 1) - (a.s ?? i)) * t,
+        sQ: (c.s ?? j) + (sd - (c.s ?? j)) * u,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Remove os laços que um offset forma no lado de dentro de curvas fechadas
+ * (largura maior que o raio): os pontos do laço colapsam no cruzamento.
+ * keepLength = true mantém a quantidade de pontos (para faixas pareadas).
+ */
+export function untangle(line, { keepLength = false, window = 60, ref = null } = {}) {
+  const out = line.map((p) => ({ ...p }));
+  const n = out.length;
+  // 1) trechos invertidos (o offset anda para trás em relação ao eixo `ref`):
+  //    colapsam no encontro das retas vizinhas
+  if (ref && ref.length === n) {
+    const rev = (k) => {
+      const ox = out[k + 1].x - out[k].x, oz = out[k + 1].z - out[k].z;
+      const cx = ref[k + 1].x - ref[k].x, cz = ref[k + 1].z - ref[k].z;
+      return ox * cx + oz * cz < 0;
+    };
+    for (let k = 0; k < n - 1; k++) {
+      if (!rev(k)) continue;
+      let e = k;
+      while (e + 1 < n - 1 && rev(e + 1)) e++;
+      // trecho invertido: pontos k..e+1; vizinhos bons: (k-1,k) e (e+1,e+2)
+      const a0 = out[Math.max(0, k - 1)], a1 = out[k];
+      const b0 = out[e + 1], b1 = out[Math.min(n - 1, e + 2)];
+      let X = null;
+      const rx = a1.x - a0.x, rz = a1.z - a0.z, qx = b1.x - b0.x, qz = b1.z - b0.z;
+      const den = rx * qz - rz * qx;
+      if (Math.abs(den) > 1e-9) {
+        const t = ((b0.x - a0.x) * qz - (b0.z - a0.z) * qx) / den;
+        X = { x: a0.x + rx * t, z: a0.z + rz * t };
+        const span = Math.hypot(b0.x - a1.x, b0.z - a1.z) + Math.hypot(rx, rz) + Math.hypot(qx, qz);
+        if (Math.hypot(X.x - (a1.x + b0.x) / 2, X.z - (a1.z + b0.z) / 2) > span * 2) X = null;
+      }
+      if (!X) X = { x: (a1.x + b0.x) / 2, z: (a1.z + b0.z) / 2 };
+      for (let m = k; m <= e + 1; m++) out[m] = { ...out[m], x: X.x, z: X.z };
+      k = e + 1;
+    }
+  }
+  // 2) laços (o offset cruza a si mesmo)
+  for (let i = 0; i < n - 3; i++) {
+    const a = out[i], b = out[i + 1];
+    const rx = b.x - a.x, rz = b.z - a.z;
+    let hit = null;
+    for (let j = Math.min(n - 2, i + window); j >= i + 2; j--) {
+      const c = out[j], d = out[j + 1];
+      const qx = d.x - c.x, qz = d.z - c.z;
+      const den = rx * qz - rz * qx;
+      if (Math.abs(den) < 1e-12) continue;
+      const wx = c.x - a.x, wz = c.z - a.z;
+      const t = (wx * qz - wz * qx) / den;
+      const u = (wx * rz - wz * rx) / den;
+      if (t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6) { hit = { j, t }; break; }
+    }
+    if (!hit) continue;
+    const X = { x: a.x + rx * hit.t, z: a.z + rz * hit.t };
+    for (let k = i + 1; k <= hit.j; k++) out[k] = { ...out[k], x: X.x, z: X.z };
+    i = hit.j - 1;
+  }
+  if (keepLength) return out;
+  return out.filter((p, k) => k === 0 || Math.hypot(p.x - out[k - 1].x, p.z - out[k - 1].z) > 1e-6);
+}

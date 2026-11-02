@@ -5,7 +5,13 @@ import { computeFrames, offsetPoints, signedArea } from '../math/curve.js';
 
 class TriBuilder {
   constructor() { this.pos = []; }
-  tri(a, b, c) { this.pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z); }
+  tri(a, b, c) {
+    // triângulos degenerados (pontos colapsados) geram normais inválidas e linhas soltas
+    const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    if (cx * cx + cy * cy + cz * cz < 1e-12) return;
+    this.pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  }
   quad(a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); }
   build() {
     const g = new THREE.BufferGeometry();
