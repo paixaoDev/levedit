@@ -12,13 +12,13 @@ const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector']);
 
 export const TOOL_INFO = {
-  select: { label: 'Selecionar', key: 'V', hint: 'Clique seleciona (Shift soma) · arraste move · quadrados = nós, losangos = novo nó, bolinhas = largura do nó (Shift: os dois lados) · Ctrl+G agrupa' },
-  corridor: { label: 'Corredor', key: 'C', hint: 'Clique para adicionar pontos (comece sobre outro corredor para ramificar com porta) · Enter/duplo clique finaliza · Backspace desfaz · Esc cancela' },
-  wall: { label: 'Parede', key: 'W', hint: 'Clique para adicionar pontos da parede · Enter finaliza · clique no primeiro ponto fecha' },
-  area: { label: 'Área', key: 'A', hint: 'Desenhe o contorno da sala/praça · clique no primeiro ponto ou Enter para fechar' },
-  connector: { label: 'Escada/Rampa', key: 'S', hint: 'Clique para posicionar · R gira · liga o nível ativo ao nível de cima' },
-  asset: { label: 'Asset', key: 'O', hint: 'Escolha o asset no painel e clique para posicionar · Shift mantém a ferramenta' },
-  agent: { label: 'Agente', key: 'P', hint: 'Escolha player ou inimigo no painel e clique para posicionar' },
+  select: { label: 'Selecionar', key: 'V', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
+  corridor: { label: 'Corredor', key: 'C', hint: 'Clique para pôr pontos · Enter ou duplo clique termina · Esc cancela' },
+  wall: { label: 'Parede', key: 'W', hint: 'Clique para pôr pontos · Enter termina · clique no primeiro ponto fecha' },
+  area: { label: 'Área', key: 'A', hint: 'Desenhe o contorno · clique no primeiro ponto ou Enter para fechar' },
+  connector: { label: 'Escada/Rampa', key: 'S', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
+  asset: { label: 'Asset', key: 'O', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
+  agent: { label: 'Agente', key: 'P', hint: 'Escolha player ou inimigo no painel e clique para colocar' },
 };
 
 export class Tools extends EventTarget {
