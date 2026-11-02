@@ -576,14 +576,15 @@ function obstacleLines(doc, ctx, o) {
       const sm = corridorSamples(x, ctx).samples;
       if (sm.length < 2) continue;
       const fr = computeFrames(sm, x.closed);
+      const inside = (pt) => insideCorridor(x, sm, pt, x.walls.thickness);
       for (const side of [1, -1]) {
         const on = side > 0 ? x.walls.left : x.walls.right;
-        lines.push({ pts: sideLine(x, sm, fr, side, on ? x.walls.thickness : 0), closed: x.closed });
+        lines.push({ id: x.id, type: x.type, pts: sideLine(x, sm, fr, side, on ? x.walls.thickness : 0), closed: x.closed, inside });
       }
     } else if (x.type === 'wall' || x.type === 'area') {
       const closed = x.type === 'area' || x.closed;
       const sm = samplePath(x.points, { closed, smooth: x.smooth, spacing: x.proc?.segment || 1 });
-      lines.push({ pts: sm, closed });
+      lines.push({ id: x.id, type: x.type, pts: sm, closed, inside: x.type === 'area' ? (pt) => insidePoly(sm, pt) : null });
     }
   }
   return lines;
@@ -591,8 +592,14 @@ function obstacleLines(doc, ctx, o) {
 
 /** Distância de um raio (P + t·d) até a primeira linha, ignorando o que está antes de `tMin`. */
 function rayHit(P, d, lines, tMin) {
-  let best = Infinity;
-  for (const { pts, closed } of lines) {
+  return rayHitLine(P, d, lines, tMin).t;
+}
+
+/** Como rayHit, mas diz também qual linha foi atingida: { t, line }. */
+function rayHitLine(P, d, lines, tMin) {
+  let best = Infinity, hitLine = null;
+  for (const line of lines) {
+    const { pts, closed } = line;
     const n = pts.length;
     const segs = closed ? n : n - 1;
     for (let k = 0; k < segs; k++) {
@@ -603,10 +610,10 @@ function rayHit(P, d, lines, tMin) {
       const wx = a.x - P.x, wz = a.z - P.z;
       const t = (wx * ez - wz * ex) / den;
       const u = (wx * d.z - wz * d.x) / den;
-      if (u >= 0 && u <= 1 && t > tMin && t < best) best = t;
+      if (u >= 0 && u <= 1 && t > tMin && t < best) { best = t; hitLine = line; }
     }
   }
-  return best;
+  return { t: best, line: hitLine };
 }
 
 /**
@@ -643,6 +650,90 @@ export function widthLimit(doc, ctx, o, index, side, obstacles = null) {
   return limit;
 }
 export { obstacleLines };
+
+/**
+ * Onde o corredor `o` (já com a mudança aplicada) entra em outro objeto perto do
+ * nó `index`. Retorna Map id -> { id, type, overflow, x, z, dx, dz, inside }, com a
+ * pior amostra de cada objeto: o ponto atingido, a direção (normal de `o`) e
+ * quanto falta para a parede de `o` parar rente. `minHalf(p, side)` = meia-largura
+ * de antes (ao engordar, o que já estava dentro dela é ignorado). inside = o eixo
+ * de `o` já está dentro do outro (não dá para resolver empurrando).
+ */
+export function nodeCollisions(doc, ctx, o, index, { sides = [1, -1], obstacles = null, minHalf = null } = {}) {
+  const out = new Map();
+  const lines = obstacles || obstacleLines(doc, ctx, o);
+  if (!lines.length) return out;
+  const sm = corridorSamples(o, ctx).samples;
+  if (sm.length < 2) return out;
+  const fr = computeFrames(sm, o.closed);
+  const n = o.points.length;
+  const put = (hit) => {
+    const prev = out.get(hit.id);
+    if (!prev || (hit.inside && !prev.inside) || (hit.inside === prev.inside && hit.overflow > prev.overflow)) out.set(hit.id, hit);
+  };
+  for (let i = 0; i < sm.length; i++) {
+    let dc = sm[i].ctrl - index;
+    if (o.closed) dc = ((dc + n / 2) % n + n) % n - n / 2;
+    if (Math.abs(dc) >= 1) continue;
+    const p = sm[i], f = fr[i];
+    if (!minHalf) {
+      for (const L of lines) {
+        if (L.inside?.(p)) put({ id: L.id, type: L.type, overflow: Infinity, x: p.x, z: p.z, dx: 0, dz: 0, inside: true });
+      }
+    }
+    for (const side of sides) {
+      const th = (side > 0 ? o.walls.left : o.walls.right) ? o.walls.thickness : 0;
+      const dir = { x: f.nx * side, z: f.nz * side };
+      const t0 = minHalf ? minHalf(p, side) * f.miter + th + 0.01 : 0.01;
+      const { t, line } = rayHitLine(p, dir, lines, t0);
+      if (!line) continue;
+      const over = halfAt(o, p.ctrl, side) - (t / f.miter - th - 0.02);
+      if (over <= 0) continue;
+      put({ id: line.id, type: line.type, overflow: over, x: p.x + dir.x * t, z: p.z + dir.z * t, dx: dir.x, dz: dir.z, inside: false });
+    }
+  }
+  return out;
+}
+
+/** Há agentes em cima do corredor Y (mesmo nível) ou patrulhando por ele? */
+export function hasAgents(doc, ctx, Y) {
+  const sm = corridorSamples(Y, ctx).samples;
+  if (sm.length < 2) return false;
+  const ys = [ctx.levelY(Y.levelId), ctx.levelY(Y.endLevelId || Y.levelId)];
+  return doc.objects.some((a) => a.type === 'agent' && (a.pathId === Y.id
+    || (ys.some((y) => Math.abs(ctx.levelY(a.levelId) - y) < 1) && insideCorridor(Y, sm, a, Y.walls.thickness + 0.5))));
+}
+
+/**
+ * Empurra os nós do corredor Y mais próximos do ponto atingido `hit` (de
+ * nodeCollisions) por `amount` metros na direção do empurrão. Pontas ligadas a
+ * um pai ou emendadas em outro corredor ficam presas. Retorna se moveu algo.
+ */
+export function pushCorridor(doc, ctx, Y, hit, amount) {
+  const sm = corridorSamples(Y, ctx).samples;
+  if (sm.length < 2) return false;
+  const c = closestOnPolyline(sm, hit, Y.closed);
+  if (!c) return false;
+  const n = Y.points.length;
+  const a = sm[c.i], b = sm[(c.i + 1) % sm.length];
+  const ctrl = a.ctrl + ((b.ctrl ?? a.ctrl) - a.ctrl) * c.f;
+  const wrap = (i) => (Y.closed ? ((i % n) + n) % n : Math.max(0, Math.min(n - 1, i)));
+  const ends = doc.objects.filter((x) => x.type === 'corridor' && x.id !== Y.id && !x.closed && x.points.length >= 2)
+    .flatMap((x) => [x.points[0], x.points[x.points.length - 1]]);
+  const locked = (i) => {
+    if (Y.closed || (i !== 0 && i !== n - 1)) return false;
+    if (Y.links?.[i === 0 ? 'start' : 'end']) return true;
+    const p = Y.points[i];
+    return ends.some((q) => Math.hypot(p.x - q.x, p.z - q.z) < 0.05);
+  };
+  const idx = [...new Set([wrap(Math.floor(ctrl)), wrap(Math.ceil(ctrl))])].filter((i) => !locked(i));
+  if (!idx.length) return false;
+  for (const i of idx) {
+    const p = Y.points[i];
+    Y.points[i] = { ...p, x: p.x + hit.dx * amount, z: p.z + hit.dz * amount };
+  }
+  return true;
+}
 
 /**
  * Área onde uma ponta de corredor em p abriria porta. Retorna null ou

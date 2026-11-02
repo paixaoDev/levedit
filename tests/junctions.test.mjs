@@ -193,3 +193,41 @@ test('corredor mais novo engordado encosta no mais antigo sem entrar', () => {
   // o mais antigo não muda
   assert.equal(j.get('a').clamp, undefined);
 });
+
+import { nodeCollisions, pushCorridor, hasAgents, halfAt as halfAt2 } from '../src/builders/corridorPath.js';
+
+test('engordar empurra o corredor vizinho; com agente ele só bloqueia', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  const a = { ...base, id: 'a', walls, points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 20, z: 0 }] };
+  const b = { ...base, id: 'b', walls, points: [{ x: 0, z: -10 }, { x: 10, z: -10 }, { x: 20, z: -10 }] };
+  const doc = { objects: [a, b] };
+  const ctx = ctxFor(doc.objects);
+  const before = { ...a, points: a.points.map((p) => ({ ...p })) };
+  a.points[1] = { ...a.points[1], wl: 9 };
+  const hits = nodeCollisions(doc, ctx, a, 1, { sides: [1], minHalf: (p, s) => halfAt2(before, p.ctrl, s) });
+  const h = hits.get('b');
+  assert.ok(h && !h.inside, 'colide com B');
+  assert.ok(Math.abs(h.overflow - (9 - 7.38)) < 0.05, `sobra ${h.overflow}`);
+  assert.ok(Math.abs(h.dz + 1) < 1e-6, 'empurra para -z');
+  assert.equal(hasAgents(doc, ctx, b), false);
+  assert.ok(pushCorridor(doc, ctx, b, h, h.overflow + 0.05));
+  assert.ok(b.points[1].z < -11.5, `nó do meio de B foi empurrado (${b.points[1].z})`);
+  assert.equal(nodeCollisions(doc, ctx, a, 1, { sides: [1], minHalf: (p, s) => halfAt2(before, p.ctrl, s) }).size, 0, 'resolvido');
+  // agente em cima de B: não pode empurrar
+  doc.objects.push({ type: 'agent', id: 'g', levelId: 'l0', x: 10, z: -11 });
+  assert.equal(hasAgents(doc, ctx, b), true);
+});
+
+test('mover um nó para dentro de outro corredor é detectado; ponta ligada não é empurrada', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  const a = { ...base, id: 'a', walls, points: [{ x: 0, z: 0 }, { x: 10, z: -9 }, { x: 20, z: 0 }] };
+  const b = { ...base, id: 'b', walls, links: { start: { id: 'x', jid: 'j' } }, points: [{ x: 10, z: -10 }, { x: 30, z: -10 }] };
+  const doc = { objects: [a, b] };
+  const ctx = ctxFor(doc.objects);
+  const h = nodeCollisions(doc, ctx, a, 1).get('b');
+  assert.ok(h, 'nó de A dentro de B');
+  // B só tem a ponta ligada (presa) e a outra ponta; a ponta presa não se mexe
+  const z0 = b.points[0].z;
+  pushCorridor(doc, ctx, b, { ...h, dx: 0, dz: -1 }, 2);
+  assert.equal(b.points[0].z, z0);
+});
