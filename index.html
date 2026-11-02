@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Levedit · editor de levels</title>
+  <meta name="description" content="Editor de levels 3D para mockups de jogos: corredores por curva com paredes procedurais, níveis, assets coloríveis e agentes jogáveis." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23fbfaf6'/%3E%3Cpath d='M4 17c4 0 4-10 8-10s4 10 8 10' fill='none' stroke='%238a7a62' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" title="Levedit">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 17c4.5 0 4.5-10 9-10s4.5 10 9 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="3" cy="17" r="1.6" fill="currentColor"/><circle cx="12" cy="7" r="1.6" fill="currentColor"/><circle cx="21" cy="17" r="1.6" fill="currentColor"/></svg>
+      <span class="brand-name">levedit</span>
+      <input id="doc-name" class="doc-name" spellcheck="false" aria-label="Nome do level" />
+    </div>
+    <nav class="toolbar" id="toolbar" aria-label="Ferramentas"></nav>
+    <div class="spacer"></div>
+    <div class="toolbar">
+      <button class="icon-btn" id="btn-undo" title="Desfazer (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+      <button class="icon-btn" id="btn-redo" title="Refazer (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+      <div class="sep"></div>
+      <div class="seg" role="group" aria-label="Vista">
+        <button id="view-3d" class="active" title="Vista 3D (T)">3D</button>
+        <button id="view-top" title="Planta / top-down (T)">Planta</button>
+      </div>
+      <button class="chip" id="btn-snap" title="Ímã na grade (G)">Grade</button>
+      <div class="sep"></div>
+      <div class="menu">
+        <button class="btn" id="btn-file">Arquivo ▾</button>
+        <div class="menu-pop" id="menu-file" hidden>
+          <button data-act="new">Novo level vazio</button>
+          <button data-act="sample">Carregar exemplo</button>
+          <hr />
+          <button data-act="open">Abrir JSON…</button>
+          <button data-act="save">Salvar JSON</button>
+          <hr />
+          <button data-act="import-model">Importar modelo 3D (GLB/GLTF)…</button>
+          <button data-act="export-glb">Exportar cena GLB</button>
+          <button data-act="screenshot">Capturar imagem PNG</button>
+          <hr />
+          <button data-act="help">Atalhos e ajuda</button>
+        </div>
+      </div>
+      <button class="btn primary" id="btn-play" title="Testar o level (Ctrl+Enter)">▶ Testar</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel left" aria-label="Níveis e objetos">
+      <section class="section">
+        <div class="section-head">
+          <h2>Níveis</h2>
+          <div class="row-actions">
+            <button class="mini" id="lvl-add-up" title="Adicionar nível acima">+ acima</button>
+            <button class="mini" id="lvl-add-down" title="Adicionar nível abaixo">+ abaixo</button>
+          </div>
+        </div>
+        <ul class="levels" id="levels"></ul>
+        <label class="inline-field">Outros níveis
+          <select id="other-levels">
+            <option value="ghost">transparentes</option>
+            <option value="normal">normais</option>
+            <option value="hide">ocultos</option>
+          </select>
+        </label>
+      </section>
+      <section class="section grow">
+        <div class="section-head"><h2>Objetos</h2><span class="muted" id="obj-count"></span></div>
+        <ul class="outliner" id="outliner"></ul>
+      </section>
+    </aside>
+
+    <div class="viewport" id="viewport">
+      <div class="view-hint" id="view-hint"></div>
+    </div>
+
+    <aside class="panel right" aria-label="Propriedades">
+      <section class="section" id="tool-options"></section>
+      <section class="section grow" id="props"></section>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-hint"></span>
+    <span class="spacer"></span>
+    <span id="status-level"></span>
+    <span id="status-cursor" class="mono"></span>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="help-dialog" class="dialog">
+    <h3>Atalhos</h3>
+    <div class="help-grid">
+      <div><kbd>V</kbd> Selecionar</div><div><kbd>C</kbd> Corredor</div>
+      <div><kbd>W</kbd> Parede</div><div><kbd>A</kbd> Área</div>
+      <div><kbd>S</kbd> Escada/rampa</div><div><kbd>O</kbd> Asset</div>
+      <div><kbd>P</kbd> Agente</div><div><kbd>T</kbd> 3D / Planta</div>
+      <div><kbd>G</kbd> Ímã na grade</div><div><kbd>F</kbd> Focar seleção</div>
+      <div><kbd>R</kbd> Girar 15° (Shift inverte)</div><div><kbd>Del</kbd> Excluir</div>
+      <div><kbd>Ctrl</kbd>+<kbd>D</kbd> Duplicar</div><div><kbd>Ctrl</kbd>+<kbd>Z</kbd> Desfazer</div>
+      <div><kbd>PgUp</kbd>/<kbd>PgDn</kbd> Trocar nível</div><div><kbd>Ctrl</kbd>+<kbd>Enter</kbd> Testar</div>
+    </div>
+    <h3>Câmera</h3>
+    <p>Arraste com o botão esquerdo no vazio ou com o direito para girar · botão do meio ou Shift+arrastar para mover · roda para zoom. Na Planta, qualquer botão move.</p>
+    <h3>Curvas</h3>
+    <p>Selecione um corredor/parede/área: quadrados são pontos (arraste; botão direito ou Alt+clique remove), losangos no meio de cada trecho criam um ponto novo ao arrastar. "Curvatura" 0 deixa cantos vivos. Alt desliga o ímã.</p>
+    <form method="dialog"><button class="btn primary">Fechar</button></form>
+  </dialog>
+
+  <input type="file" id="file-json" accept=".json,application/json" hidden />
+  <input type="file" id="file-model" accept=".glb,.gltf" hidden />
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
