@@ -168,6 +168,14 @@ h3 { font-size: 12px; margin: 14px 0 6px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------ viewport */
 .viewport { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.link-tip {
+  position: absolute; pointer-events: none; transform: translate(14px, -130%);
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(47, 42, 36, 0.18);
+}
+.link-tip.join { background: var(--select); }
+.link-tip[hidden] { display: none; }
 .viewport canvas { display: block; width: 100%; height: 100%; outline: none; }
 .view-hint {
   position: absolute; left: 12px; top: 10px; pointer-events: none;

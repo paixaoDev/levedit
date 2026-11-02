@@ -2,9 +2,9 @@
 // área), colocação (assets, agentes, escadas) e alças de pontos de controle.
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
-import { buildObject, corridorSamples, makeContext } from '../builders/index.js';
-import { nodeHalf, attachEnd, detachEnd } from '../builders/corridorPath.js';
-import { computeFrames, closestOnPolyline } from '../math/curve.js';
+import { buildObject, makeContext } from '../builders/index.js';
+import { nodeHalf, attachEnd, detachEnd, findAttachTarget } from '../builders/corridorPath.js';
+import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
@@ -43,11 +43,19 @@ export class Tools extends EventTarget {
     this.handles.renderOrder = 10;
     vp.helpers.add(this.handles);
     this.draftLine = null;
+    this.linkHint = new THREE.Group();
+    this.linkHint.renderOrder = 40;
+    vp.helpers.add(this.linkHint);
+    this.linkTip = document.createElement('div');
+    this.linkTip.className = 'link-tip';
+    this.linkTip.hidden = true;
+    vp.container.appendChild(this.linkTip);
+    this._linkAt = null;
     this._down = null;
     this._bind();
     store.addEventListener('selection', () => this.refreshHandles());
     store.addEventListener('change', () => this.refreshHandles());
-    vp.onFrame.push(() => this._scaleHandles());
+    vp.onFrame.push(() => { this._scaleHandles(); this._animateLinkHint(); });
   }
 
   setTool(t) {
@@ -55,6 +63,7 @@ export class Tools extends EventTarget {
     this.cancelDraft();
     this.tool = t;
     this._clearPreview();
+    this._clearLinkHint();
     this.vp.dom.style.cursor = t === 'select' ? 'default' : 'crosshair';
     this.dispatchEvent(new CustomEvent('toolchange', { detail: { tool: t } }));
   }
@@ -170,6 +179,7 @@ export class Tools extends EventTarget {
     const ndc = this.vp.ndc(e);
     if (this.drag) { this._doDrag(ndc, e); return; }
     if (this.tool === 'select') {
+      this._clearLinkHint();
       const h = this._pickHandle(ndc);
       this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : 'default';
       return;
@@ -177,6 +187,8 @@ export class Tools extends EventTarget {
     const p = this._cursorPoint(ndc, e);
     this.cursor = p;
     this.dispatchEvent(new CustomEvent('cursor', { detail: p }));
+    if (this.tool === 'corridor') this._showLinkHint(p, this._rawCursor, this.levelY, null);
+    else this._clearLinkHint();
     if (PATH_TYPES.has(this.tool)) this._updateDraftPreview();
     else this._updatePlacePreview();
   }
@@ -193,6 +205,7 @@ export class Tools extends EventTarget {
         }, { ids: [d.id], record: false });
       }
       this.store.emit({ ids: [], structure: true }); // atualiza painéis
+      this._clearLinkHint();
     }
     this._setControls(true);
     if (e.button === 0) this._down = null;
@@ -239,6 +252,7 @@ export class Tools extends EventTarget {
   _cursorPoint(ndc, e) {
     const p = this.vp.groundPoint(ndc, this.levelY);
     if (!p) return null;
+    this._rawCursor = { x: p.x, z: p.z };
     return this.snapPoint(p, e?.altKey, null, this.tool === 'corridor');
   }
 
@@ -246,13 +260,14 @@ export class Tools extends EventTarget {
    * Ímãs: extremidades de caminhos, eixo de corredores existentes (para
    * ramificar um corredor a partir de outro) e grade.
    */
-  snapPoint(p, noSnap, excludeId, branch = false) {
+  snapPoint(p, noSnap, excludeId, branch = false, y = null) {
     const out = { x: p.x, z: p.z };
     if (noSnap) return out;
     // ímã nas extremidades de outros caminhos (para emendar corredores)
     let best = null, bestD = 0.9;
     for (const o of this.store.doc.objects) {
       if (!PATH_TYPES.has(o.type) || o.id === excludeId || !o.points.length) continue;
+      if (branch && o.type === 'corridor') continue; // tratado abaixo (ligação a nó)
       for (const q of [o.points[0], o.points[o.points.length - 1]]) {
         const d = Math.hypot(q.x - p.x, q.z - p.z);
         if (d < bestD) { bestD = d; best = q; }
@@ -260,20 +275,9 @@ export class Tools extends EventTarget {
     }
     if (best) return { x: best.x, z: best.z, snapped: true };
     if (branch) {
-      const lv = this.levelY;
-      let bb = null;
-      for (const o of this.store.doc.objects) {
-        if (o.type !== 'corridor' || o.id === excludeId || o.points.length < 2) continue;
-        const sm = corridorSamples(o, this.vp.ctx).samples;
-        const c = closestOnPolyline(sm, p, o.closed);
-        if (!c || Math.abs(c.y - lv) > 1) continue;
-        const half = Math.max(nodeHalf(o, 0, 1), o.width / 2);
-        if (c.d < half && (!bb || c.d < bb.d)) bb = c;
-      }
-      if (bb) {
-        // grade ao longo do eixo para posições limpas
-        return { x: bb.x, z: bb.z, snapped: true, branch: true };
-      }
+      // eixo/nó de outro corredor: a ponta vira ramificação presa a um nó
+      const t = findAttachTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
+      if (t) return { x: t.x, z: t.z, snapped: true, branch: true, target: t };
     }
     const s = this.store.doc.settings;
     if (s.snap) { out.x = snap(p.x, s.gridSize / 2); out.z = snap(p.z, s.gridSize / 2); }
@@ -294,7 +298,9 @@ export class Tools extends EventTarget {
         d.endName = d.index === 0 ? 'start' : 'end';
         this.store.mutate((doc) => detachEnd(doc.objects.find((x) => x.id === d.id), d.endName), { ids: [d.id], record: true });
       }
-      const p = this.snapPoint(hit, e.altKey, d.id, cur?.type === 'corridor' && isEnd);
+      const branch = cur?.type === 'corridor' && isEnd;
+      const p = this.snapPoint(hit, e.altKey, d.id, branch, d.y);
+      if (branch) this._showLinkHint(p, hit, d.y, d.id);
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
         if (o?.points[d.index]) o.points[d.index] = { ...o.points[d.index], x: p.x, z: p.z };
@@ -406,6 +412,91 @@ export class Tools extends EventTarget {
   cancelDraft() {
     this.draft = null;
     this._clearPreview();
+    this._clearLinkHint();
+  }
+
+  // ---------------------------------------------------------- indicador de conexão
+  /**
+   * Mostra onde a ponta vai se conectar: anel pulsante no nó alvo (existente ou
+   * novo), linha do cursor até ele, nós conectáveis por perto e um rótulo.
+   */
+  _showLinkHint(p, raw, y, excludeId) {
+    this._clearLinkHint();
+    if (!p) return;
+    const doc = this.store.doc;
+    const t = p.target;
+    const yy = (t?.y ?? y) + 0.08;
+    const near = raw || p;
+    // nós conectáveis dos corredores próximos (mesmo nível)
+    for (const o of doc.objects) {
+      if (o.type !== 'corridor' || o.id === excludeId || o.points.length < 2) continue;
+      const oy = this.vp.ctx.levelY(o.levelId);
+      if (Math.abs(oy - y) > 1 && Math.abs(this.vp.ctx.levelY(o.endLevelId || o.levelId) - y) > 1) continue;
+      o.points.forEach((q, i) => {
+        if (Math.hypot(q.x - near.x, q.z - near.z) > 10) return;
+        if (t && t.a.id === o.id && t.node === i) return;
+        const m = new THREE.Mesh(LINK_GEO.dot, q.jid ? LINK_MAT.dotJoint : LINK_MAT.dot);
+        m.position.set(q.x, oy + 0.07, q.z);
+        m.rotation.x = -Math.PI / 2;
+        m.userData.linkHandle = 0.7;
+        m.renderOrder = 40;
+        this.linkHint.add(m);
+      });
+    }
+    if (!t) { this._linkAt = null; this.linkTip.hidden = true; return; }
+    const mat = t.continuation ? LINK_MAT.ringJoin : LINK_MAT.ring;
+    const ring = new THREE.Mesh(LINK_GEO.ring, mat);
+    ring.position.set(t.x, yy, t.z);
+    ring.rotation.x = -Math.PI / 2;
+    ring.userData.linkHandle = 1.6;
+    ring.userData.pulse = true;
+    ring.renderOrder = 41;
+    this.linkHint.add(ring);
+    const core = new THREE.Mesh(LINK_GEO.core, mat);
+    core.position.copy(ring.position);
+    core.rotation.x = -Math.PI / 2;
+    core.userData.linkHandle = 1;
+    core.renderOrder = 41;
+    this.linkHint.add(core);
+    if (raw && Math.hypot(raw.x - t.x, raw.z - t.z) > 0.05) {
+      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(raw.x, yy, raw.z), new THREE.Vector3(t.x, yy, t.z)]);
+      const l = new THREE.Line(g, LINK_MAT.line);
+      l.computeLineDistances();
+      l.renderOrder = 40;
+      l.userData.ownGeometry = true;
+      this.linkHint.add(l);
+    }
+    const name = t.a.name || 'corredor';
+    this.linkTip.textContent = t.continuation ? `Emendar com ${name}`
+      : t.node >= 0 ? `Conectar ao nó de ${name}` : `Novo nó em ${name}`;
+    this.linkTip.classList.toggle('join', !!t.continuation);
+    this._linkAt = new THREE.Vector3(t.x, yy, t.z);
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+  }
+
+  _clearLinkHint() {
+    for (const c of [...this.linkHint.children]) {
+      this.linkHint.remove(c);
+      if (c.userData.ownGeometry) c.geometry.dispose();
+    }
+    this._linkAt = null;
+    if (this.linkTip) this.linkTip.hidden = true;
+  }
+
+  _placeLinkTip() {
+    if (!this._linkAt) return;
+    const v = this._linkAt.clone().project(this.vp.camera);
+    const w = this.vp.container.clientWidth, h = this.vp.container.clientHeight;
+    this.linkTip.style.left = `${((v.x + 1) / 2) * w}px`;
+    this.linkTip.style.top = `${((1 - v.y) / 2) * h}px`;
+  }
+
+  _animateLinkHint() {
+    if (!this.linkHint.children.length) return;
+    const k = 1 + 0.18 * Math.sin(performance.now() / 160);
+    for (const c of this.linkHint.children) if (c.userData.pulse) c.scale.multiplyScalar(k);
+    this._placeLinkTip();
   }
 
   _clearPreview() {
@@ -562,6 +653,7 @@ export class Tools extends EventTarget {
     };
     for (const c of this.handles.children) if (c.userData.handle) c.scale.setScalar(scaleFor(c));
     for (const c of this.vp.helpers.children) if (c.userData.draftHandle) c.scale.setScalar(scaleFor(c));
+    for (const c of this.linkHint.children) if (c.userData.linkHandle) c.scale.setScalar(scaleFor(c) * c.userData.linkHandle);
   }
 }
 
@@ -581,4 +673,17 @@ const HANDLE_MAT = {
   draft: new THREE.MeshBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true }),
   edgeHandle: new THREE.MeshBasicMaterial({ color: THEME.select, depthTest: false, transparent: true }),
   edge: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true }),
+};
+
+const LINK_GEO = {
+  ring: new THREE.RingGeometry(0.62, 0.8, 32),
+  core: new THREE.CircleGeometry(0.3, 20),
+  dot: new THREE.RingGeometry(0.3, 0.46, 20),
+};
+const LINK_MAT = {
+  ring: new THREE.MeshBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, side: THREE.DoubleSide }),
+  ringJoin: new THREE.MeshBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, side: THREE.DoubleSide }),
+  dot: new THREE.MeshBasicMaterial({ color: THEME.line, depthTest: false, transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
+  dotJoint: new THREE.MeshBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, opacity: 0.6, side: THREE.DoubleSide }),
+  line: new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.25, gapSize: 0.18, depthTest: false, transparent: true }),
 };
