@@ -158,29 +158,6 @@ function insideCorridor(o, sm, pt, extra) {
   return c.d < halfAt(o, ctrl, side) + extra - 0.01;
 }
 
-function bbox(pts, pad) {
-  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-  for (const p of pts) { x0 = Math.min(x0, p.x); z0 = Math.min(z0, p.z); x1 = Math.max(x1, p.x); z1 = Math.max(z1, p.z); }
-  return { x0: x0 - pad, z0: z0 - pad, x1: x1 + pad, z1: z1 + pad };
-}
-const boxHit = (a, b) => a.x0 <= b.x1 && b.x0 <= a.x1 && a.z0 <= b.z1 && b.z0 <= a.z1;
-
-/** Trechos [s0, s1] de uma linha (campo s) cujos pontos satisfazem fn. */
-function insideRanges(line, fn) {
-  const out = [];
-  let run = null;
-  const n = line.length;
-  const mid = (i, j) => (line[i].s + line[j].s) / 2;
-  for (let i = 0; i < n; i++) {
-    if (fn(line[i])) {
-      if (!run) run = [i > 0 ? mid(i - 1, i) : line[i].s - 0.5, 0];
-      run[1] = i < n - 1 ? mid(i, i + 1) : line[i].s + 0.5;
-    } else if (run) { out.push(run); run = null; }
-  }
-  if (run) out.push(run);
-  return out;
-}
-
 /**
  * Liga a ponta `end` do corredor `b` a um "pai" P (corredor ou área), dado por
  * linhas paralelas à parede dele: edge (piso, levemente para dentro), inner
