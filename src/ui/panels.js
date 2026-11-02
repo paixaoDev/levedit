@@ -229,13 +229,13 @@ export class Panels {
       el('button', { class: 'btn small danger', onclick: () => this.store.removeObject(o.id) }, 'Excluir'),
     );
 
-    const isCor = o.type === 'corridor';
+    const isCor = o.type === 'corridor' || o.type === 'area'; // só abrem onde há ligação
     const procFields = () => [
       el('div', { class: 'props-actions' }, ...Object.entries(RULE_PRESETS).filter(([k]) => !(isCor && k === 'portas')).map(([, p]) => el('button', { class: 'btn small', onclick: () => this.applyPreset(o.id, p) }, p.label)),
         el('button', { class: 'btn small', title: 'Nova semente aleatória', onclick: () => this.change(o.id, 'proc.seed', Math.floor(Math.random() * 9999), true) }, '🎲 Semente')),
       F({ key: 'proc.segment', label: 'Segmento (m)', type: 'range', min: 0.25, max: 4, step: 0.25 }),
       F({ key: 'proc.seed', label: 'Semente', type: 'number', step: 1 }),
-      isCor ? el('p', { class: 'info' }, 'Corredores só abrem passagem onde outro corredor sai deles (veja Junções).') : null,
+      isCor ? el('p', { class: 'info' }, o.type === 'area' ? 'Áreas só abrem passagem onde chega um corredor ou encosta outra área (veja Portas).' : 'Corredores só abrem passagem onde outro corredor sai deles (veja Junções).') : null,
       isCor ? null : F({ key: 'proc.gapChance', label: 'Chance de vão', type: 'range', min: 0, max: 0.6, step: 0.01 }),
       isCor ? null : F({ key: 'proc.gapLength', label: 'Tamanho vão', type: 'range', min: 1, max: 8, step: 1 }),
       F({ key: 'proc.heightVar', label: 'Variação altura', type: 'range', min: 0, max: 1, step: 0.01 }),
@@ -307,6 +307,14 @@ export class Panels {
     } else if (o.type === 'area') {
       box.append(el('p', { class: 'info' }, `${o.points.length} pontos`), actions);
       box.append(G('Forma', [F({ key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 })]));
+      const ja = this.app.vp.ctx.junctions?.().get(o.id);
+      const fromNames = [...new Set((ja?.cuts || []).map((c) => this.store.get(c.from)?.name).filter(Boolean))];
+      box.append(G('Portas', [
+        el('p', { class: 'info' }, 'Termine um corredor dentro ou na borda da área para abrir uma porta ali. Áreas encostadas ganham uma porta no meio da parede em comum.'),
+        F({ key: 'joins.areas', label: 'Com áreas vizinhas', type: 'select', options: JOIN_STYLES }),
+        F({ key: 'doorWidth', label: 'Largura da porta', type: 'range', min: 0.8, max: 6, step: 0.1, show: (x) => x.joins.areas !== 'none' }),
+        fromNames.length ? el('p', { class: 'info' }, `Ligada a: ${fromNames.join(', ')}`) : null,
+      ]));
       box.append(G('Piso', [
         F({ key: 'floor.enabled', label: 'Piso', type: 'bool' }),
         F({ key: 'floor.thickness', label: 'Espessura', type: 'range', min: 0.05, max: 4, step: 0.05, show: (x) => x.floor.enabled }),

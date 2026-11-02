@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
-import { nodeHalf, attachEnd, detachEnd, findAttachTarget } from '../builders/corridorPath.js';
+import { nodeHalf, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines } from '../builders/corridorPath.js';
 import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -278,6 +278,9 @@ export class Tools extends EventTarget {
       // eixo/nó de outro corredor: a ponta vira ramificação presa a um nó
       const t = findAttachTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
       if (t) return { x: t.x, z: t.z, snapped: true, branch: true, target: t };
+      // borda/interior de uma área: a ponta abre porta na parede dela
+      const at = findAreaTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
+      if (at) return { x: at.snap ? at.x : p.x, z: at.snap ? at.z : p.z, snapped: at.snap, branch: true, target: at };
     }
     const s = this.store.doc.settings;
     if (s.snap) { out.x = snap(p.x, s.gridSize / 2); out.z = snap(p.z, s.gridSize / 2); }
@@ -314,10 +317,28 @@ export class Tools extends EventTarget {
       const st = this.store.doc.settings;
       if (st.snap && !e.altKey) w = snap(w, 0.25);
       w = Math.max(0.3, Math.min(40, w));
+      // não deixa a parede entrar em outro corredor/parede/área (Alt atravessa)
+      const both = d.both || e.shiftKey;
+      let blocked = false;
+      if (!e.altKey) {
+        if (!d.obstacles) d.obstacles = obstacleLines(this.store.doc, this.vp.ctx, o);
+        for (const side of both ? [1, -1] : [d.side]) {
+          const lim = widthLimit(this.store.doc, this.vp.ctx, o, d.index, side, d.obstacles);
+          if (w > lim) { w = Math.max(Math.min(w, nodeHalf(o, d.index, side)), lim, 0.3); blocked = true; }
+        }
+      }
       this.store.mutate((doc) => {
         const pt = doc.objects.find((x) => x.id === d.id).points[d.index];
-        if (d.both || e.shiftKey) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
+        if (both) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
       }, { ids: [d.id], record });
+      if (blocked) {
+        const q = { x: P.x + fr.nx * w * d.side, z: P.z + fr.nz * w * d.side };
+        this.linkTip.textContent = 'Encostou em outro objeto · Alt atravessa';
+        this.linkTip.classList.add('join');
+        this._linkAt = new THREE.Vector3(q.x, d.y, q.z);
+        this.linkTip.hidden = false;
+        this._placeLinkTip();
+      } else this._clearLinkHint();
     } else if (d.kind === 'move') {
       const s = this.store.doc.settings;
       let dx = hit.x - d.start.x, dz = hit.z - d.start.z;
@@ -434,7 +455,7 @@ export class Tools extends EventTarget {
       if (Math.abs(oy - y) > 1 && Math.abs(this.vp.ctx.levelY(o.endLevelId || o.levelId) - y) > 1) continue;
       o.points.forEach((q, i) => {
         if (Math.hypot(q.x - near.x, q.z - near.z) > 10) return;
-        if (t && t.a.id === o.id && t.node === i) return;
+        if (t && t.a && t.a.id === o.id && t.node === i) return;
         const m = new THREE.Mesh(LINK_GEO.dot, q.jid ? LINK_MAT.dotJoint : LINK_MAT.dot);
         m.position.set(q.x, oy + 0.07, q.z);
         m.rotation.x = -Math.PI / 2;
@@ -444,6 +465,22 @@ export class Tools extends EventTarget {
       });
     }
     if (!t) { this._linkAt = null; this.linkTip.hidden = true; return; }
+    if (t.area) {
+      // porta na parede da área: anel na borda
+      const ring = new THREE.Mesh(LINK_GEO.ring, LINK_MAT.ring);
+      ring.position.set(t.bx, yy, t.bz);
+      ring.rotation.x = -Math.PI / 2;
+      ring.userData.linkHandle = 1.6;
+      ring.userData.pulse = true;
+      ring.renderOrder = 41;
+      this.linkHint.add(ring);
+      this.linkTip.textContent = `Porta na área ${t.area.name || ''}`.trim();
+      this.linkTip.classList.remove('join');
+      this._linkAt = new THREE.Vector3(t.bx, yy, t.bz);
+      this.linkTip.hidden = false;
+      this._placeLinkTip();
+      return;
+    }
     const mat = t.continuation ? LINK_MAT.ringJoin : LINK_MAT.ring;
     const ring = new THREE.Mesh(LINK_GEO.ring, mat);
     ring.position.set(t.x, yy, t.z);

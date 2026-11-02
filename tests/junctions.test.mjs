@@ -124,3 +124,56 @@ test('lado de dentro de curva fechada não dobra', () => {
     assert.ok(ox * cx + oz * cz >= -1e-9, `segmento ${i} não anda para trás`);
   }
 });
+
+import { widthLimit } from '../src/builders/corridorPath.js';
+
+test('engordar um corredor para na parede do vizinho', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  const a = { ...base, id: 'a', walls, points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 20, z: 0 }] };
+  // vizinho paralelo a 10 m (lado esquerdo de A = -z)
+  const b = { ...base, id: 'b', walls, points: [{ x: 0, z: -10 }, { x: 20, z: -10 }] };
+  const doc = { objects: [a, b] };
+  const lim = widthLimit(doc, ctxFor(doc.objects), a, 1, 1);
+  // face externa de B em z = -10 + 2 + 0.3 = -7.7; A precisa da própria parede (0.3) e folga
+  assert.ok(Math.abs(lim - (7.7 - 0.3 - 0.02)) < 0.05, `limite ${lim}`);
+  assert.equal(widthLimit(doc, ctxFor(doc.objects), a, 1, -1), Infinity, 'lado livre');
+  // ramificação ligada não bloqueia
+  const c = { ...base, id: 'c', walls, links: { start: { id: 'a', jid: 'x' } }, points: [{ x: 10, z: 0 }, { x: 10, z: 8 }] };
+  const doc2 = { objects: [a, c] };
+  assert.equal(widthLimit(doc2, ctxFor(doc2.objects), a, 1, -1), Infinity);
+});
+
+const areaBase = { type: 'area', levelId: 'l0', smooth: 0, closed: true, proc: { segment: 1 }, walls: { enabled: true, height: 3, thickness: 0.3 }, joins: { areas: 'door' }, doorWidth: 1.6 };
+
+test('corredor que termina dentro de uma área abre porta na parede dela', () => {
+  const room = { ...areaBase, id: 'r', points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 10, z: 10 }, { x: 0, z: 10 }] };
+  const c = { ...base, id: 'c', width: 2, points: [{ x: 5, z: -10 }, { x: 5, z: 1 }] };
+  const j = computeJunctions(ctxFor([room, c]));
+  const cut = j.get('r').cuts[0];
+  assert.ok(cut, 'área recebe abertura');
+  assert.ok(cut.s1 - cut.s0 > 1.9 && cut.s1 - cut.s0 < 2.3, `vão ${cut.s1 - cut.s0}`);
+  const t = j.get('c').trims.end;
+  // piso do corredor vai até a borda da área (z ~ 0.02), parede até o centro da parede da área
+  assert.ok(Math.abs(t.sides[1].floorPt.z - 0.02) < 1e-6);
+  assert.ok(Math.abs(t.sides[1].wallPt.z - 0.15) < 1e-6);
+});
+
+test('corredor longe da área não abre nada', () => {
+  const room = { ...areaBase, id: 'r', points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 10, z: 10 }, { x: 0, z: 10 }] };
+  const c = { ...base, id: 'c', points: [{ x: 5, z: -10 }, { x: 5, z: -3 }] };
+  assert.equal(computeJunctions(ctxFor([room, c])).get('r').cuts.length, 0);
+});
+
+test('áreas encostadas ganham uma porta na parede em comum', () => {
+  const a = { ...areaBase, id: 'a', points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 10, z: 10 }, { x: 0, z: 10 }] };
+  const b = { ...areaBase, id: 'b', points: [{ x: 10, z: 2 }, { x: 18, z: 2 }, { x: 18, z: 8 }, { x: 10, z: 8 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  assert.equal(j.get('a').cuts.length, 1);
+  assert.equal(j.get('b').cuts.length, 1);
+  const ca = j.get('a').cuts[0];
+  assert.ok(Math.abs(ca.s1 - ca.s0 - 1.6) < 1e-6);
+  assert.equal(j.get('b').cuts[0].style, 'open', 'sem batente duplicado');
+  // estilo "none" desliga
+  a.joins = { areas: 'none' };
+  assert.equal(computeJunctions(ctxFor([a, b])).get('a').cuts.length, 0);
+});

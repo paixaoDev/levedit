@@ -159,8 +159,10 @@ export class Viewport {
     } else if (detail.ids) {
       // junções: mudar um corredor pode abrir/fechar portas nos outros
       const ids = new Set(detail.ids);
-      const touchesCorridor = [...ids].some((id) => this.store.get(id)?.type === 'corridor' || (this.objects.get(id) && !this.store.get(id)));
-      if (touchesCorridor) for (const o of doc.objects) if (o.type === 'corridor') ids.add(o.id);
+      // corredores e áreas abrem portas uns nos outros: mudou um, reconstrói todos
+      const linked = (t) => t === 'corridor' || t === 'area';
+      const touchesCorridor = [...ids].some((id) => linked(this.store.get(id)?.type) || (this.objects.get(id) && !this.store.get(id)));
+      if (touchesCorridor) for (const o of doc.objects) if (linked(o.type)) ids.add(o.id);
       for (const id of ids) {
         const old = this.objects.get(id);
         if (old) { this.root.remove(old); this._dispose(old); this.objects.delete(id); }
