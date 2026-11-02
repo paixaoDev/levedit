@@ -29,6 +29,8 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - **Curvatura** 0 = cantos vivos, >0 = Catmull-Rom. Offsets com miter mantêm a largura constante nas curvas.
 - **Ramificação**: comece ou termine um corredor sobre outro e a parede do outro abre ali, com porta (batente + verga),
   abertura livre ou sem abertura. Corredores não têm vãos aleatórios: só abrem onde existe saída.
+  Ao arrastar a ponta (ou desenhar) perto de outro corredor, um anel laranja mostra onde ela vai se conectar
+  ("Conectar ao nó", "Novo nó" ou "Emendar"), e os nós próximos aparecem como bolinhas.
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,
   decoração) e conecta as pontas mais próximas ao primeiro selecionado. Ctrl+Shift+G desagrupa.

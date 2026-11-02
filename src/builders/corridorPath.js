@@ -130,6 +130,42 @@ export function computeJunctions(ctx) {
 let _jid = 0;
 const newJid = () => `j${Date.now().toString(36)}${(++_jid).toString(36)}`;
 
+/** Distância (m) para reaproveitar um nó existente em vez de criar outro. */
+export const NODE_REUSE = 1.2;
+/** Folga além da meia-largura em que uma ponta ainda conecta num corredor. */
+export const ATTACH_MARGIN = 1.0;
+
+/**
+ * Onde uma ponta em E (altura Ey) se conectaria: o corredor mais próximo cujo
+ * eixo passe por ali. Retorna null ou
+ * { a, x, z, ctrl, node (índice de nó existente ou -1), continuation }.
+ * continuation = a ponta cai numa ponta do outro corredor (emenda, não ramifica).
+ */
+export function findAttachTarget(doc, ctx, E, Ey, excludeId) {
+  let best = null;
+  for (const a of doc.objects) {
+    if (a.type !== 'corridor' || a.id === excludeId || a.points.length < 2) continue;
+    const sa = corridorSamples(a, ctx).samples;
+    const c = closestOnPolyline(sa, E, a.closed);
+    if (!c || Math.abs(c.y - Ey) > 1) continue;
+    const ctrl = sa[c.i].ctrl + ((sa[(c.i + 1) % sa.length].ctrl ?? sa[c.i].ctrl) - sa[c.i].ctrl) * c.f;
+    const half = Math.max(halfAt(a, ctrl, 1), halfAt(a, ctrl, -1));
+    if (c.d > half + ATTACH_MARGIN) continue;
+    if (!best || c.d < best.c.d) best = { a, c, ctrl };
+  }
+  if (!best) return null;
+  const { a, c, ctrl } = best;
+  const n = a.points.length;
+  let node = -1, nd = NODE_REUSE;
+  a.points.forEach((p, i) => {
+    const d = Math.hypot(p.x - c.x, p.z - c.z);
+    if (d < nd) { nd = d; node = i; }
+  });
+  const continuation = node >= 0 && !a.closed && (node === 0 || node === n - 1);
+  const at = node >= 0 ? a.points[node] : c;
+  return { a, x: at.x, z: at.z, y: c.y, ctrl, node, continuation };
+}
+
 /**
  * Prende a ponta `end` ('start' | 'end') do corredor `b` ao corredor mais
  * próximo cujo eixo passe por ela: reaproveita um nó perto ou insere um nó novo
@@ -140,30 +176,19 @@ export function attachEnd(doc, ctx, b, end) {
   const idx = end === 'start' ? 0 : b.points.length - 1;
   const E = b.points[idx];
   const Ey = end === 'start' ? ctx.levelY(b.levelId) : ctx.levelY(b.endLevelId || b.levelId);
-  let best = null;
-  for (const a of doc.objects) {
-    if (a.type !== 'corridor' || a.id === b.id || a.points.length < 2) continue;
-    const sa = corridorSamples(a, ctx).samples;
-    const c = closestOnPolyline(sa, E, a.closed);
-    if (!c || Math.abs(c.y - Ey) > 1) continue;
-    const ctrl = sa[c.i].ctrl + ((sa[(c.i + 1) % sa.length].ctrl ?? sa[c.i].ctrl) - sa[c.i].ctrl) * c.f;
-    const half = Math.max(halfAt(a, ctrl, 1), halfAt(a, ctrl, -1));
-    if (c.d > half + 1.0) continue;
-    if (!best || c.d < best.c.d) best = { a, c, ctrl };
-  }
-  if (!best) return false;
-  const { a, c, ctrl } = best;
+  const t = findAttachTarget(doc, ctx, E, Ey, b.id);
+  if (!t) return false;
+  const { a, ctrl } = t;
   const n = a.points.length;
-  // nó existente perto? (pontas do pai = continuação, não ramificação)
-  let k = a.points.findIndex((p) => Math.hypot(p.x - c.x, p.z - c.z) < 1.2);
-  if (k >= 0 && !a.closed && (k === 0 || k === n - 1)) {
-    b.points[idx] = { ...E, x: a.points[k].x, z: a.points[k].z };
+  if (t.continuation) {
+    b.points[idx] = { ...E, x: t.x, z: t.z };
     return false;
   }
+  let k = t.node;
   if (k < 0) {
     const seg = Math.min(a.closed ? n - 1 : n - 2, Math.floor(ctrl));
     const j = (seg + 1) % n;
-    const np = { x: c.x, z: c.z };
+    const np = { x: t.x, z: t.z };
     const pa = a.points[seg], pb = a.points[j];
     if (pa.wl || pb.wl) np.wl = (nodeHalf(a, seg, 1) + nodeHalf(a, j, 1)) / 2;
     if (pa.wr || pb.wr) np.wr = (nodeHalf(a, seg, -1) + nodeHalf(a, j, -1)) / 2;
