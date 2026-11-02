@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
-import { nodeHalf, attachEnd, detachEnd, findAttachTarget } from '../builders/corridorPath.js';
+import { nodeHalf, attachEnd, detachEnd, findAttachTarget, widthLimit, obstacleLines } from '../builders/corridorPath.js';
 import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -314,10 +314,28 @@ export class Tools extends EventTarget {
       const st = this.store.doc.settings;
       if (st.snap && !e.altKey) w = snap(w, 0.25);
       w = Math.max(0.3, Math.min(40, w));
+      // não deixa a parede entrar em outro corredor/parede/área (Alt atravessa)
+      const both = d.both || e.shiftKey;
+      let blocked = false;
+      if (!e.altKey) {
+        if (!d.obstacles) d.obstacles = obstacleLines(this.store.doc, this.vp.ctx, o);
+        for (const side of both ? [1, -1] : [d.side]) {
+          const lim = widthLimit(this.store.doc, this.vp.ctx, o, d.index, side, d.obstacles);
+          if (w > lim) { w = Math.max(Math.min(w, nodeHalf(o, d.index, side)), lim, 0.3); blocked = true; }
+        }
+      }
       this.store.mutate((doc) => {
         const pt = doc.objects.find((x) => x.id === d.id).points[d.index];
-        if (d.both || e.shiftKey) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
+        if (both) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
       }, { ids: [d.id], record });
+      if (blocked) {
+        const q = { x: P.x + fr.nx * w * d.side, z: P.z + fr.nz * w * d.side };
+        this.linkTip.textContent = 'Encostou em outro objeto · Alt atravessa';
+        this.linkTip.classList.add('join');
+        this._linkAt = new THREE.Vector3(q.x, d.y, q.z);
+        this.linkTip.hidden = false;
+        this._placeLinkTip();
+      } else this._clearLinkHint();
     } else if (d.kind === 'move') {
       const s = this.store.doc.settings;
       let dx = hit.x - d.start.x, dz = hit.z - d.start.z;

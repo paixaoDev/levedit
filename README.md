@@ -32,6 +32,7 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
   Ao arrastar a ponta (ou desenhar) perto de outro corredor, um anel laranja mostra onde ela vai se conectar
   ("Conectar ao nó", "Novo nó" ou "Emendar"), e os nós próximos aparecem como bolinhas.
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
+  Ao engordar, a parede para ao encostar em outro corredor, parede ou área (Alt atravessa).
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,
   decoração) e conecta as pontas mais próximas ao primeiro selecionado. Ctrl+Shift+G desagrupa.
 - **Regras procedurais** por objeto: semente, chance e tamanho de vãos (portas/ruínas), variação de altura,

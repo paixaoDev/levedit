@@ -350,3 +350,96 @@ export function syncLinks(doc) {
     }
   }
 }
+
+// ------------------------------------------------------------------ limite de largura
+/** Linhas que um corredor não deve atravessar ao engordar (outros corredores, paredes, áreas). */
+function obstacleLines(doc, ctx, o) {
+  const y0 = ctx.levelY(o.levelId), y1 = ctx.levelY(o.endLevelId || o.levelId);
+  const near = (x) => {
+    const a = ctx.levelY(x.levelId), b = ctx.levelY(x.endLevelId || x.levelId);
+    return Math.min(Math.abs(a - y0), Math.abs(a - y1), Math.abs(b - y0), Math.abs(b - y1)) < 1;
+  };
+  // corredores ligados a este (ramificação, pai ou emenda) não contam
+  const ends = o.closed ? [] : [o.points[0], o.points[o.points.length - 1]];
+  const related = (x) => {
+    if (Object.values(o.links || {}).some((l) => l?.id === x.id)) return true;
+    if (Object.values(x.links || {}).some((l) => l?.id === o.id)) return true;
+    if (x.closed || !ends.length) return false;
+    const xe = [x.points[0], x.points[x.points.length - 1]];
+    return ends.some((p) => xe.some((q) => Math.hypot(p.x - q.x, p.z - q.z) < 0.05));
+  };
+  const lines = [];
+  for (const x of doc.objects) {
+    if (x.id === o.id || !x.points || x.points.length < 2 || !near(x)) continue;
+    if (x.type === 'corridor') {
+      if (related(x)) continue;
+      const sm = corridorSamples(x, ctx).samples;
+      if (sm.length < 2) continue;
+      const fr = computeFrames(sm, x.closed);
+      for (const side of [1, -1]) {
+        const on = side > 0 ? x.walls.left : x.walls.right;
+        lines.push({ pts: sideLine(x, sm, fr, side, on ? x.walls.thickness : 0), closed: x.closed });
+      }
+    } else if (x.type === 'wall' || x.type === 'area') {
+      const closed = x.type === 'area' || x.closed;
+      const sm = samplePath(x.points, { closed, smooth: x.smooth, spacing: x.proc?.segment || 1 });
+      lines.push({ pts: sm, closed });
+    }
+  }
+  return lines;
+}
+
+/** Distância de um raio (P + t·d) até a primeira linha, ignorando o que está antes de `tMin`. */
+function rayHit(P, d, lines, tMin) {
+  let best = Infinity;
+  for (const { pts, closed } of lines) {
+    const n = pts.length;
+    const segs = closed ? n : n - 1;
+    for (let k = 0; k < segs; k++) {
+      const a = pts[k], b = pts[(k + 1) % n];
+      const ex = b.x - a.x, ez = b.z - a.z;
+      const den = d.x * ez - d.z * ex;
+      if (Math.abs(den) < 1e-12) continue;
+      const wx = a.x - P.x, wz = a.z - P.z;
+      const t = (wx * ez - wz * ex) / den;
+      const u = (wx * d.z - wz * d.x) / den;
+      if (u >= 0 && u <= 1 && t > tMin && t < best) best = t;
+    }
+  }
+  return best;
+}
+
+/**
+ * Maior meia-largura que o nó `index` pode ter no lado `side` sem que o
+ * corredor (com a espessura da parede) entre em outro objeto. Infinity = livre.
+ * Obstáculos que já estavam dentro do corredor antes são ignorados.
+ */
+export function widthLimit(doc, ctx, o, index, side, obstacles = null) {
+  const lines = obstacles || obstacleLines(doc, ctx, o);
+  if (!lines.length) return Infinity;
+  const sm = corridorSamples(o, ctx).samples;
+  if (sm.length < 2) return Infinity;
+  const fr = computeFrames(sm, o.closed);
+  const n = o.points.length;
+  const th = (side > 0 ? o.walls.left : o.walls.right) ? o.walls.thickness : 0;
+  let limit = Infinity;
+  for (let i = 0; i < sm.length; i++) {
+    let dc = sm[i].ctrl - index;
+    if (o.closed) dc = ((dc + n / 2) % n + n) % n - n / 2;
+    if (Math.abs(dc) >= 1) continue;
+    const w = dc >= 0 ? 1 - smoothstep(dc) : smoothstep(1 + dc); // peso deste nó na amostra
+    if (w < 0.25) continue;
+    const f = fr[i];
+    const dir = { x: f.nx * side, z: f.nz * side };
+    const cur = halfAt(o, sm[i].ctrl, side) * f.miter;
+    const t = rayHit(sm[i], dir, lines, cur + th + 0.01);
+    if (!Number.isFinite(t)) continue;
+    const allowed = t / f.miter - th - 0.02; // meia-largura máxima nesta amostra
+    // halfAt = outro·(1-w) + este·w  =>  este ≤ (allowed - outro·(1-w)) / w
+    const other = (halfAt(o, sm[i].ctrl, side) - nodeHalf(o, index, side) * w) / (1 - w || 1);
+    const lim = w > 0.999 ? allowed : (allowed - other * (1 - w)) / w;
+    limit = Math.min(limit, lim);
+  }
+  return limit;
+}
+export { obstacleLines };

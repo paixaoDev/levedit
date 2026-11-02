@@ -124,3 +124,21 @@ test('lado de dentro de curva fechada não dobra', () => {
     assert.ok(ox * cx + oz * cz >= -1e-9, `segmento ${i} não anda para trás`);
   }
 });
+
+import { widthLimit } from '../src/builders/corridorPath.js';
+
+test('engordar um corredor para na parede do vizinho', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  const a = { ...base, id: 'a', walls, points: [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 20, z: 0 }] };
+  // vizinho paralelo a 10 m (lado esquerdo de A = -z)
+  const b = { ...base, id: 'b', walls, points: [{ x: 0, z: -10 }, { x: 20, z: -10 }] };
+  const doc = { objects: [a, b] };
+  const lim = widthLimit(doc, ctxFor(doc.objects), a, 1, 1);
+  // face externa de B em z = -10 + 2 + 0.3 = -7.7; A precisa da própria parede (0.3) e folga
+  assert.ok(Math.abs(lim - (7.7 - 0.3 - 0.02)) < 0.05, `limite ${lim}`);
+  assert.equal(widthLimit(doc, ctxFor(doc.objects), a, 1, -1), Infinity, 'lado livre');
+  // ramificação ligada não bloqueia
+  const c = { ...base, id: 'c', walls, links: { start: { id: 'a', jid: 'x' } }, points: [{ x: 10, z: 0 }, { x: 10, z: 8 }] };
+  const doc2 = { objects: [a, c] };
+  assert.equal(widthLimit(doc2, ctxFor(doc2.objects), a, 1, -1), Infinity);
+});
