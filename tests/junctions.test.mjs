@@ -231,3 +231,17 @@ test('mover um nó para dentro de outro corredor é detectado; ponta ligada não
   pushCorridor(doc, ctx, b, { ...h, dx: 0, dz: -1 }, 2);
   assert.equal(b.points[0].z, z0);
 });
+
+test('quem foi editado por último é quem encosta, não o mais novo', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  // b é mais novo no documento, mas a foi editado depois
+  const a = { ...base, id: 'a', walls, edited: 5, points: [{ x: 0, z: -10 }, { x: 0, z: 0, wl: 12 }, { x: 0, z: 10 }] };
+  const b = { ...base, id: 'b', walls, edited: 2, points: [{ x: -8, z: -10 }, { x: -8, z: 10 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  assert.equal(j.get('b').clamp, undefined, 'b fica como está');
+  assert.ok(j.get('a').clamp, 'a se ajusta');
+  // a vai em +z: normal (+x) com lado -1 aponta para b, em x = -8
+  const fl = { nx: 1, nz: 0, miter: 1 };
+  const h = j.get('a').clamp({ x: 0, z: 0, s: 10 }, fl, -1);
+  assert.ok(Math.abs(h - (8 - 2.3 - 0.3 - 0.02)) < 1e-6, `meia-largura ${h}`);
+});

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
-import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor } from '../builders/corridorPath.js';
+import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
 import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -311,6 +311,7 @@ export class Tools extends EventTarget {
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
         if (!o?.points[d.index]) return;
+        markEdited(doc, o);
         const prev = { ...o.points[d.index] };
         const place = (t) => { o.points[d.index] = { ...prev, x: lerp(prev.x, p.x, t), z: lerp(prev.z, p.z, t) }; };
         if (!guard) { place(1); return; }
@@ -351,6 +352,7 @@ export class Tools extends EventTarget {
       let res = null;
       this.store.mutate((doc) => {
         const ob = doc.objects.find((x) => x.id === d.id);
+        markEdited(doc, ob);
         const setW = (v) => {
           const q = { ...ob.points[d.index] };
           for (const sd of sides) q[sd > 0 ? 'wl' : 'wr'] = v;
@@ -378,6 +380,7 @@ export class Tools extends EventTarget {
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
         if (!o) return;
+        markEdited(doc, o);
         if (PATH_TYPES.has(o.type)) {
           if (s.snap && !e.altKey) { dx = snap(dx, s.gridSize / 2); dz = snap(dz, s.gridSize / 2); }
           o.points = d.orig.map((p) => ({ ...p, x: p.x + dx, z: p.z + dz }));

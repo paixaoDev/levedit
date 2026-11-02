@@ -1,7 +1,7 @@
 // Store do documento: mutações, undo/redo por snapshot e autosave local.
 import { normalizeDoc, sampleDoc } from './model.js';
 import { debounce, deepClone } from './util.js';
-import { syncLinks } from './builders/corridorPath.js';
+import { syncLinks, markEdited } from './builders/corridorPath.js';
 
 const STORAGE_KEY = 'levedit.doc.v1';
 const MAX_HISTORY = 120;
@@ -127,7 +127,7 @@ export class Store extends EventTarget {
   }
 
   addObject(obj) {
-    this.mutate((d) => d.objects.push(obj), { ids: [obj.id], structure: true });
+    this.mutate((d) => { d.objects.push(obj); if (obj.points) markEdited(d, obj); }, { ids: [obj.id], structure: true });
     this.select(obj.id);
   }
 

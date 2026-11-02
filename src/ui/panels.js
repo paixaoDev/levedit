@@ -4,7 +4,7 @@ import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeOb
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
 import { samplePath, pathLength } from '../math/curve.js';
-import { JOIN_STYLES } from '../builders/corridorPath.js';
+import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
 
 const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente' };
@@ -489,6 +489,7 @@ export class Panels {
           if (t.fromLevelId === t.levelId) t.fromLevelId = value;
         }
         setByPath(t, key, value);
+        if (t.points && /^(width|smooth|walls\.)/.test(key)) markEdited(d, t);
         if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
         if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
       }

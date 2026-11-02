@@ -398,7 +398,8 @@ export function computeJunctions(ctx) {
   // ---- quem invade encosta: cada corredor não entra nos corredores mais antigos
   // (e no pai, longe da porta) nem em áreas que não são o destino dele. A meia-largura
   // de cada amostra é limitada para a face externa da parede parar rente à do outro.
-  const order = new Map(ctx.doc.objects.map((o, i) => [o.id, i]));
+  // quem foi editado por último é quem encosta (sem marca: ordem no documento)
+  const order = new Map(ctx.doc.objects.map((o, i) => [o.id, (o.edited ?? -1) * 1e6 + i]));
   for (const X of corridors) {
     const obst = [];
     const ends = X.closed ? [] : [X.points[0], X.points[X.points.length - 1]];
@@ -411,7 +412,7 @@ export function computeJunctions(ctx) {
       if (!sameLevel(ctx.levelY(Y.levelId), ctx.levelY(Y.endLevelId || Y.levelId))) continue;
       if (Object.values(Y.links || {}).some((l) => l?.id === X.id)) continue; // filho de X
       const isParent = xLinks.includes(Y.id) || Object.entries(trimsX).some(([, t]) => t?.parent === Y.id);
-      if (!isParent && order.get(Y.id) > order.get(X.id)) continue; // o mais novo é quem encosta
+      if (!isParent && order.get(Y.id) > order.get(X.id)) continue; // o editado por último é quem encosta
       if (!Y.closed && ends.some((p) => [Y.points[0], Y.points[Y.points.length - 1]].some((q) => Math.hypot(p.x - q.x, p.z - q.z) < 0.05))) continue; // emenda
       const sm = paths.get(Y.id), fr = framesOf(Y);
       obst.push({
@@ -549,6 +550,13 @@ export function syncLinks(doc) {
       if (p.x !== node.x || p.z !== node.z) b.points[idx] = { ...p, x: node.x, z: node.z };
     }
   }
+}
+
+/** Marca `o` como o objeto editado por último (ele é quem se ajusta numa sobreposição). */
+export function markEdited(doc, o) {
+  if (!o) return;
+  const top = Math.max(0, ...doc.objects.map((x) => x.edited ?? 0));
+  if (o.edited !== top || doc.objects.some((x) => x !== o && x.edited === top)) o.edited = top + 1;
 }
 
 // ------------------------------------------------------------------ limite de largura
