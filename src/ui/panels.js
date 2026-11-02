@@ -4,6 +4,7 @@ import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeOb
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
 import { samplePath, pathLength } from '../math/curve.js';
+import { JOIN_STYLES } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
 
 const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente' };
@@ -123,11 +124,11 @@ export class Panels {
       for (const o of items) {
         const color = o.color || o.walls?.color || o.floor?.color || '#fff';
         const li = el('li', {
-          class: `item ${this.store.selection === o.id ? 'selected' : ''} ${o.levelId !== doc.activeLevelId ? 'dim' : ''}`,
+          class: `item ${this.store.isSelected(o.id) ? 'selected' : ''} ${o.levelId !== doc.activeLevelId ? 'dim' : ''}`,
           title: o.name,
-          onclick: () => { this.store.select(o.id); },
+          onclick: (e) => { this.store.select(o.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }); },
           ondblclick: () => this.app.focusSelection(),
-        }, el('span', { class: 'dot', style: `background:${color}` }), o.name || TYPE_LABEL[o.type], el('span', { class: 'lvl' }, lvName.get(o.levelId) || ''));
+        }, el('span', { class: 'dot', style: `background:${color}` }), o.name || TYPE_LABEL[o.type], o.groupId ? el('span', { class: 'grp', title: 'Em grupo' }, '⛓') : null, el('span', { class: 'lvl' }, lvName.get(o.levelId) || ''));
         this.$outliner.append(li);
       }
     }
@@ -206,6 +207,7 @@ export class Panels {
     box.innerHTML = '';
     const o = this.store.get(this.store.selection);
     if (!o) return this.renderDocProps(box);
+    if (this.store.multi.size > 1) return this.renderMulti(box);
     const onChange = (key, value, final) => this.change(o.id, key, value, final);
     const F = (f) => field(o, f, onChange);
     const doc = this.store.doc;
@@ -227,13 +229,15 @@ export class Panels {
       el('button', { class: 'btn small danger', onclick: () => this.store.removeObject(o.id) }, 'Excluir'),
     );
 
+    const isCor = o.type === 'corridor';
     const procFields = () => [
-      el('div', { class: 'props-actions' }, ...Object.entries(RULE_PRESETS).map(([k, p]) => el('button', { class: 'btn small', onclick: () => this.applyPreset(o.id, p) }, p.label)),
+      el('div', { class: 'props-actions' }, ...Object.entries(RULE_PRESETS).filter(([k]) => !(isCor && k === 'portas')).map(([, p]) => el('button', { class: 'btn small', onclick: () => this.applyPreset(o.id, p) }, p.label)),
         el('button', { class: 'btn small', title: 'Nova semente aleatória', onclick: () => this.change(o.id, 'proc.seed', Math.floor(Math.random() * 9999), true) }, '🎲 Semente')),
       F({ key: 'proc.segment', label: 'Segmento (m)', type: 'range', min: 0.25, max: 4, step: 0.25 }),
       F({ key: 'proc.seed', label: 'Semente', type: 'number', step: 1 }),
-      F({ key: 'proc.gapChance', label: 'Chance de vão', type: 'range', min: 0, max: 0.6, step: 0.01 }),
-      F({ key: 'proc.gapLength', label: 'Tamanho vão', type: 'range', min: 1, max: 8, step: 1 }),
+      isCor ? el('p', { class: 'info' }, 'Corredores só abrem passagem onde outro corredor sai deles (veja Junções).') : null,
+      isCor ? null : F({ key: 'proc.gapChance', label: 'Chance de vão', type: 'range', min: 0, max: 0.6, step: 0.01 }),
+      isCor ? null : F({ key: 'proc.gapLength', label: 'Tamanho vão', type: 'range', min: 1, max: 8, step: 1 }),
       F({ key: 'proc.heightVar', label: 'Variação altura', type: 'range', min: 0, max: 1, step: 0.01 }),
       F({ key: 'proc.jitter', label: 'Irregularidade', type: 'range', min: 0, max: 2, step: 0.01 }),
     ];
@@ -250,9 +254,20 @@ export class Panels {
       const samples = samplePath(o.points, { closed: o.closed, smooth: o.smooth, spacing: 0.5 });
       box.append(el('p', { class: 'info' }, `${o.points.length} pontos · ${pathLength(samples, o.closed).toFixed(1)} m`));
       box.append(actions, el('div', { class: 'props-actions' },
-        el('button', { class: 'btn small', onclick: () => this.change(o.id, 'points', [...o.points].reverse(), true) }, 'Inverter sentido')));
+        el('button', { class: 'btn small', onclick: () => this.reverseCorridor(o.id) }, 'Inverter sentido'),
+        el('button', { class: 'btn small', title: 'Volta todos os nós para a largura padrão', onclick: () => this.change(o.id, 'points', o.points.map(({ x, z }) => ({ x, z })), true) }, 'Resetar larguras')));
+      box.append(this.groupInfo(o));
+      const jn = this.app.vp.ctx.junctions?.().get(o.id);
+      const cutsFrom = (jn?.cuts || []).map((c) => this.store.get(c.from)?.name).filter(Boolean);
+      box.append(G('Junções', [
+        el('p', { class: 'info' }, 'Comece ou termine um corredor sobre outro para ramificar: a parede do outro abre ali.'),
+        F({ key: 'joins.start', label: jn?.trims.start ? 'Início (ligado)' : 'Início', type: 'select', options: JOIN_STYLES }),
+        F({ key: 'joins.end', label: jn?.trims.end ? 'Fim (ligado)' : 'Fim', type: 'select', options: JOIN_STYLES }),
+        cutsFrom.length ? el('p', { class: 'info' }, `Saídas neste corredor: ${cutsFrom.join(', ')}`) : null,
+      ]));
       box.append(G('Forma', [
-        F({ key: 'width', label: 'Largura', type: 'range', min: 1, max: 30, step: 0.5 }),
+        F({ key: 'width', label: 'Largura padrão', type: 'range', min: 1, max: 30, step: 0.5 }),
+        el('p', { class: 'info' }, 'Arraste as bolinhas laranja de cada nó para engordar/afinar só ali (Shift = os dois lados, botão direito reseta).'),
         F({ key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }),
         F({ key: 'closed', label: 'Fechado (loop)', type: 'bool' }),
       ]));
@@ -394,32 +409,83 @@ export class Panels {
     ));
   }
 
-  applyPreset(id, p) {
+  renderMulti(box) {
+    const objs = this.store.selectedObjects;
+    const cors = objs.filter((x) => x.type === 'corridor');
+    box.append(el('div', { class: 'section-head' }, el('h2', {}, `${objs.length} selecionados`)));
+    box.append(el('p', { class: 'info' }, objs.map((x) => x.name).join(', ')));
+    box.append(el('div', { class: 'props-actions' },
+      el('button', { class: 'btn small primary', disabled: cors.length < 2, onclick: () => this.app.groupSelection() }, 'Agrupar e conectar (Ctrl+G)'),
+      el('button', { class: 'btn small', onclick: () => this.app.ungroupSelection() }, 'Desagrupar'),
+      el('button', { class: 'btn small danger', onclick: () => { for (const x of objs) this.store.removeObject(x.id); } }, 'Excluir todos'),
+    ));
+    box.append(el('p', { class: 'info' }, 'Corredores do mesmo grupo compartilham paredes, piso, regras e decoração: mudar um muda todos. Ao agrupar, as pontas mais próximas se conectam (ponta com ponta ou abrindo porta na lateral).'));
+  }
+
+  groupInfo(o) {
+    if (!o.groupId) return el('p', { class: 'info' }, 'Shift+clique em outro corredor e Ctrl+G para agrupar e conectar.');
+    const members = this.store.doc.objects.filter((x) => x.groupId === o.groupId);
+    return el('div', { class: 'props-actions' },
+      el('span', { class: 'info' }, `Grupo com ${members.length} corredores`),
+      el('button', { class: 'btn small', onclick: () => { this.store.select(null); for (const m of members) this.store.select(m.id, { add: true }); } }, 'Selecionar grupo'),
+      el('button', { class: 'btn small', onclick: () => this.change(o.id, 'groupId', null, true) }, 'Sair do grupo'));
+  }
+
+  reverseCorridor(id) {
+    const o = this.store.get(id);
+    const pts = [...o.points].reverse().map((p) => {
+      const q = { x: p.x, z: p.z };
+      if (p.wr) q.wl = p.wr;
+      if (p.wl) q.wr = p.wl;
+      return q;
+    });
     this.store.mutate((d) => {
-      const o = d.objects.find((x) => x.id === id);
-      Object.assign(o.proc, p.proc);
-      if (o.type === 'wall') o.mode = p.mode;
-      else o.walls.mode = p.mode;
-    }, { ids: [id] });
+      const t = d.objects.find((x) => x.id === id);
+      t.points = pts;
+      t.joins = { start: t.joins?.end || 'door', end: t.joins?.start || 'door' };
+      if (t.endLevelId) { const lv = t.levelId; t.levelId = t.endLevelId; t.endLevelId = lv; }
+    }, { ids: [id], structure: true });
+  }
+
+  applyPreset(id, p) {
+    const ids = this.groupIds(id);
+    this.store.mutate((d) => {
+      for (const o of d.objects.filter((x) => ids.includes(x.id))) {
+        Object.assign(o.proc, p.proc);
+        if (o.type === 'wall') o.mode = p.mode;
+        else o.walls.mode = p.mode;
+      }
+    }, { ids });
     this.renderProps();
+  }
+
+  /** ids do grupo de um objeto (ou só ele). */
+  groupIds(id) {
+    const o = this.store.get(id);
+    if (!o?.groupId) return [id];
+    return this.store.doc.objects.filter((x) => x.groupId === o.groupId).map((x) => x.id);
   }
 
   change(id, key, value, final) {
     const o = this.store.get(id);
     if (!o) return;
+    // estilo compartilhado no grupo
+    const shared = /^(walls|floor|proc|deco)\./.test(key) || key === 'smooth';
+    const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
     const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId'].includes(key);
     this.store.mutate((d) => {
-      const t = d.objects.find((x) => x.id === id);
-      if (key === 'levelId' && t.type === 'connector') {
-        if (t.fromLevelId === t.levelId) t.fromLevelId = value;
+      for (const t of d.objects.filter((x) => targets.includes(x.id))) {
+        if (key === 'levelId' && t.type === 'connector') {
+          if (t.fromLevelId === t.levelId) t.fromLevelId = value;
+        }
+        setByPath(t, key, value);
+        if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
+        if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
       }
-      setByPath(t, key, value);
-      if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
-      if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
-    }, { ids: [id], record, structure: structural && final });
-    if (structural && final) this.renderProps();
+    }, { ids: targets, record, structure: (structural || key === 'groupId' || key.startsWith('joins')) && final });
+    if ((structural || key === 'groupId') && final) this.renderProps();
   }
 }
 

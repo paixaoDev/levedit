@@ -11,7 +11,8 @@ export class Store extends EventTarget {
     this.doc = null;
     this.undoStack = [];
     this.redoStack = [];
-    this.selection = null; // id do objeto selecionado
+    this.selection = null; // id do objeto selecionado (principal)
+    this.multi = new Set(); // seleção múltipla (inclui o principal)
     this._autosave = debounce(() => this.saveLocal(), 600);
   }
 
@@ -28,6 +29,7 @@ export class Store extends EventTarget {
     this.doc = normalizeDoc(deepClone(doc));
     if (resetHistory) { this.undoStack = []; this.redoStack = []; }
     this.selection = null;
+    this.multi = new Set();
     this.emit({ all: true });
     this.emitSelection();
     this._autosave();
@@ -69,7 +71,8 @@ export class Store extends EventTarget {
   }
 
   _afterHistory() {
-    if (this.selection && !this.get(this.selection)) this.selection = null;
+    for (const id of [...this.multi]) if (!this.get(id)) this.multi.delete(id);
+    if (this.selection && !this.get(this.selection)) this.selection = [...this.multi][0] || null;
     this.emit({ all: true, structure: true });
     this.emitSelection();
     this._autosave();
@@ -91,10 +94,30 @@ export class Store extends EventTarget {
     return this.level(this.doc.activeLevelId) || this.doc.levels[0];
   }
 
-  select(id) {
-    if (this.selection === id) return;
-    this.selection = id;
+  /** Seleciona um objeto; com add=true alterna na seleção múltipla. */
+  select(id, { add = false } = {}) {
+    if (add && id) {
+      if (this.multi.has(id)) {
+        this.multi.delete(id);
+        if (this.selection === id) this.selection = [...this.multi].pop() || null;
+      } else {
+        this.multi.add(id);
+        this.selection = id;
+      }
+    } else {
+      if (this.selection === id && this.multi.size <= 1) return;
+      this.selection = id;
+      this.multi = new Set(id ? [id] : []);
+    }
     this.emitSelection();
+  }
+
+  isSelected(id) {
+    return this.multi.has(id);
+  }
+
+  get selectedObjects() {
+    return [...this.multi].map((id) => this.get(id)).filter(Boolean);
   }
 
   emitSelection() {
@@ -111,6 +134,7 @@ export class Store extends EventTarget {
       d.objects = d.objects.filter((o) => o.id !== id);
       for (const o of d.objects) if (o.pathId === id) o.pathId = null;
     }, { ids: [id], structure: true });
+    this.multi.delete(id);
     if (this.selection === id) this.select(null);
   }
 }

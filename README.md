@@ -27,6 +27,11 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - Edição por pontos: arraste os quadrados; arraste o losango no meio de um trecho para criar um ponto novo
   (é assim que se "puxa" a curva pelo centro); botão direito/Alt+clique remove o ponto.
 - **Curvatura** 0 = cantos vivos, >0 = Catmull-Rom. Offsets com miter mantêm a largura constante nas curvas.
+- **Ramificação**: comece ou termine um corredor sobre outro e a parede do outro abre ali, com porta (batente + verga),
+  abertura livre ou sem abertura. Corredores não têm vãos aleatórios: só abrem onde existe saída.
+- **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
+- **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,
+  decoração) e conecta as pontas mais próximas ao primeiro selecionado. Ctrl+Shift+G desagrupa.
 - **Regras procedurais** por objeto: semente, chance e tamanho de vãos (portas/ruínas), variação de altura,
   irregularidade (jitter lateral), tamanho do segmento e modo contínuo/blocos. Presets: Limpo, Ruínas, Orgânico,
   Muralha, Com portas.
@@ -66,6 +71,7 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 | O | Asset | Ctrl+D | Duplicar |
 | P | Agente | Ctrl+Z / Ctrl+Shift+Z | Desfazer / refazer |
 | PgUp/PgDn | Trocar nível | Ctrl+Enter | Testar |
+| Shift+clique | Somar à seleção | Ctrl+G / Ctrl+Shift+G | Agrupar / desagrupar |
 
 Câmera: arraste no vazio (ou botão direito) para girar, botão do meio ou Shift+arrastar para mover, roda para zoom.
 

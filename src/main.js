@@ -9,6 +9,9 @@ import { Panels } from './ui/panels.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
 import { customModels } from './builders/assets.js';
+import { makeContext, corridorSamples } from './builders/index.js';
+import { nodeHalf } from './builders/corridorPath.js';
+import { closestOnPolyline } from './math/curve.js';
 import { deepClone, uid } from './util.js';
 
 const TOOL_ICONS = {
@@ -162,6 +165,7 @@ class App {
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this.store.redo() : this.store.undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); this.store.redo(); return; }
     if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); this.duplicateSelection(); return; }
+    if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); e.shiftKey ? this.ungroupSelection() : this.groupSelection(); return; }
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); this.fileAction('save'); return; }
     if (mod && e.key === 'Enter') { e.preventDefault(); this.startPlay(); return; }
     if (this.tools.onKey(e)) { e.preventDefault(); return; }
@@ -170,7 +174,10 @@ class App {
     const toolKey = Object.entries(TOOL_INFO).find(([, i]) => i.key.toLowerCase() === k);
     if (toolKey) { this.tools.setTool(toolKey[0]); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (this.store.selection) { e.preventDefault(); this.store.removeObject(this.store.selection); }
+      if (this.store.selection) {
+        e.preventDefault();
+        for (const id of [...this.store.multi]) this.store.removeObject(id);
+      }
       return;
     }
     if (k === 'r') this.tools.rotateSelection(e.shiftKey ? -1 : 1);
@@ -189,9 +196,63 @@ class App {
     const c = deepClone(o);
     c.id = uid(o.type.slice(0, 3));
     c.name = `${o.name} cópia`;
-    if (c.points) c.points = c.points.map((p) => ({ x: p.x + 2, z: p.z + 2 }));
+    if (c.points) c.points = c.points.map((p) => ({ ...p, x: p.x + 2, z: p.z + 2 }));
     else { c.x += 2; c.z += 2; }
     this.store.addObject(c);
+  }
+
+  /**
+   * Ctrl+G: agrupa os corredores selecionados (estilo compartilhado) e tenta
+   * conectá-los: a ponta mais próxima de cada um vai para a ponta ou para o
+   * eixo de um corredor já no grupo (abrindo porta na lateral).
+   */
+  groupSelection() {
+    const sel = this.store.selectedObjects.filter((o) => o.type === 'corridor');
+    if (sel.length < 2) { this.toast('Selecione 2 ou mais corredores (Shift+clique) e aperte Ctrl+G.'); return; }
+    const primary = sel[0]; // o primeiro selecionado é o modelo e fica parado
+    const gid = primary.groupId || sel.find((o) => o.groupId)?.groupId || uid('grp');
+    let connected = 0;
+    this.store.mutate((d) => {
+      const P = d.objects.find((o) => o.id === primary.id);
+      const members = sel.map((o) => d.objects.find((x) => x.id === o.id));
+      const ctx = makeContext(d);
+      const placed = [P];
+      // ordena pelos mais próximos do principal
+      const dist0 = (m) => Math.min(...m.points.map((p) => Math.min(...P.points.map((q) => Math.hypot(p.x - q.x, p.z - q.z)))));
+      const others = members.filter((m) => m !== P).sort((a, b) => dist0(a) - dist0(b));
+      for (const m of members) m.groupId = gid;
+      for (const m of others) {
+        for (const k of ['walls', 'floor', 'proc', 'deco']) m[k] = deepClone(P[k]);
+        m.smooth = P.smooth;
+        if (m.closed) { placed.push(m); continue; }
+        let best = null;
+        for (const t of placed) {
+          const sm = corridorSamples(t, ctx).samples;
+          for (const idx of [0, m.points.length - 1]) {
+            const c = closestOnPolyline(sm, m.points[idx], t.closed);
+            if (c && (!best || c.d < best.c.d)) best = { idx, c, t };
+          }
+        }
+        if (best && best.c.d < 15) {
+          const { idx, c, t } = best;
+          const half = Math.max(nodeHalf(t, 0, 1), nodeHalf(t, 0, -1));
+          const ends = t.closed ? [] : [t.points[0], t.points[t.points.length - 1]];
+          const near = ends.find((q) => Math.hypot(q.x - c.x, q.z - c.z) < half * 1.5);
+          const target = near || { x: c.x, z: c.z };
+          m.points[idx] = { ...m.points[idx], x: target.x, z: target.z };
+          connected++;
+        }
+        placed.push(m);
+      }
+    }, { all: true, structure: true });
+    this.toast(`Grupo com ${sel.length} corredores · ${connected} conexão(ões)`);
+  }
+
+  ungroupSelection() {
+    const ids = this.store.selectedObjects.filter((o) => o.groupId).map((o) => o.id);
+    if (!ids.length) return;
+    this.store.mutate((d) => { for (const o of d.objects) if (ids.includes(o.id)) o.groupId = null; }, { ids, structure: true });
+    this.toast('Desagrupado');
   }
 
   focusSelection() {

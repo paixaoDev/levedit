@@ -162,6 +162,7 @@ h3 { font-size: 12px; margin: 14px 0 6px; color: var(--ink-2); }
 .outliner li.item:hover { background: var(--paper); }
 .outliner li.item.selected { background: var(--accent-soft); color: var(--accent); }
 .outliner li.item .dot { width: 9px; height: 9px; border-radius: 2px; border: 1px solid var(--line); flex: none; }
+.outliner li.item .grp { font-size: 10px; color: var(--select); }
 .outliner li.item .lvl { margin-left: auto; font-size: 10px; color: var(--muted); }
 .outliner li.item.dim { opacity: 0.5; }
 

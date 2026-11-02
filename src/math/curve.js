@@ -128,12 +128,42 @@ export function computeFrames(pts, closed = false) {
   return frames;
 }
 
-/** Desloca os pontos ao longo da normal esquerda (d > 0 = esquerda). */
+/**
+ * Desloca os pontos ao longo da normal esquerda (d > 0 = esquerda).
+ * d pode ser um número ou uma função (índice) => distância (largura variável).
+ */
 export function offsetPoints(pts, frames, d) {
+  const dist = typeof d === 'function' ? d : () => d;
   return pts.map((p, i) => {
     const f = frames[i];
-    return { ...p, x: p.x + f.nx * f.miter * d, z: p.z + f.nz * f.miter * d };
+    const di = dist(i);
+    return { ...p, x: p.x + f.nx * f.miter * di, z: p.z + f.nz * f.miter * di };
   });
+}
+
+/**
+ * Ponto mais próximo de p numa polilinha amostrada (com s acumulado).
+ * Retorna {x, z, y, s, d, i, f, tx, tz} ou null.
+ */
+export function closestOnPolyline(samples, p, closed = false) {
+  let best = null;
+  const n = samples.length;
+  const segs = closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = samples[i], b = samples[(i + 1) % n];
+    const c = closestOnSegment(p, a, b);
+    if (!best || c.d < best.d) {
+      const L = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      const sb = i + 1 < n ? b.s : a.s + L;
+      best = {
+        x: c.x, z: c.z, d: c.d, i, f: c.t,
+        s: a.s + (sb - a.s) * c.t,
+        y: (a.y ?? 0) + ((b.y ?? 0) - (a.y ?? 0)) * c.t,
+        tx: (b.x - a.x) / L, tz: (b.z - a.z) / L,
+      };
+    }
+  }
+  return best;
 }
 
 /** Ponto mais próximo num segmento AB (2D). Retorna {t, d}. */

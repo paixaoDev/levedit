@@ -29,6 +29,8 @@ export const TYPE_DEFAULTS = {
     smooth: 0.5,
     width: 4,
     endLevelId: null,
+    groupId: null,
+    joins: { start: 'door', end: 'door' },
     rampStyle: 'ramp',
     stepHeight: 0.25,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
@@ -199,10 +201,16 @@ export function sampleDoc() {
   objs.push(ramp);
   objs.push(makeObject('corridor', {
     name: 'Corredor alto', levelId: l1.id, smooth: 0.5, width: 5,
-    points: [{ x: 24, z: 20 }, { x: 24, z: 30 }, { x: 10, z: 34 }, { x: -4, z: 30 }],
+    points: [{ x: 24, z: 20 }, { x: 24, z: 30, wl: 4.5, wr: 3.5 }, { x: 10, z: 34 }, { x: -4, z: 30 }],
     walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'blocks', capStart: false, capEnd: false },
     proc: { seed: 9, gapChance: 0.08, gapLength: 1, heightVar: 0.35, jitter: 0.15, segment: 1.5 },
     deco: { type: 'rocks', side: 'both', density: 0.5, color: '#b9a88a', inset: 0.8, seed: 5 },
+  }));
+  objs.push(makeObject('corridor', {
+    name: 'Saída leste', levelId: l1.id, smooth: 0.5, width: 3,
+    points: [{ x: 24, z: 25 }, { x: 34, z: 25 }, { x: 40, z: 31 }],
+    walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: true },
+    joins: { start: 'door', end: 'door' },
   }));
   objs.push(makeObject('area', {
     name: 'Mezanino', levelId: l1.id,
@@ -223,6 +231,6 @@ export function sampleDoc() {
   objs.push(makeObject('agent', { name: 'Atirador', role: 'enemy', mode: 'shooter', behavior: 'patrol', pathId: null, levelId: l1.id, x: 12, z: 33, color: '#c0632f' }));
   objs.push(makeObject('agent', { name: 'Bolota', role: 'enemy', mode: 'arcade', behavior: 'wander', levelId: l0.id, x: 1, z: 2, color: '#b56b7a' }));
   // atirador patrulha o corredor alto
-  objs[objs.length - 2].pathId = objs[2].id;
+  objs[objs.length - 2].pathId = objs.find((o) => o.name === 'Corredor alto').id;
   return doc;
 }
