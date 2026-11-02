@@ -67,3 +67,60 @@ test('ramificação vira nó compartilhado do pai e acompanha o nó', () => {
   syncLinks(doc);
   assert.equal(b.links.start, null);
 });
+
+import { computeFrames, offsetPoints, untangle } from '../src/math/curve.js';
+
+test('emenda ponta com ponta: mesma normal e mesma largura nos dois lados', () => {
+  const a = { ...base, id: 'a', width: 4, points: [{ x: 0, z: 0 }, { x: 10, z: 0 }] };
+  const b = { ...base, id: 'b', width: 6, points: [{ x: 10, z: 0 }, { x: 10, z: 10 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  const ja = j.get('a').joints.end, jb = j.get('b').joints.start;
+  assert.ok(ja && jb);
+  // mesma tangente (bissetriz) e mesma normal
+  assert.ok(Math.abs(ja.nx - jb.nx) < 1e-9 && Math.abs(ja.nz - jb.nz) < 1e-9);
+  // largura média (2 e 3 -> 2.5) dos dois lados
+  assert.equal(ja.hl, 2.5); assert.equal(jb.hl, 2.5);
+  // bordas coincidem no ponto da emenda
+  const P = { x: 10, z: 0 };
+  const la = { x: P.x + ja.nx * ja.hl, z: P.z + ja.nz * ja.hl };
+  const lb = { x: P.x + jb.nx * jb.hl, z: P.z + jb.nz * jb.hl };
+  assert.ok(Math.hypot(la.x - lb.x, la.z - lb.z) < 1e-9);
+});
+
+test('emenda fim com fim troca os lados', () => {
+  const a = { ...base, id: 'a', points: [{ x: 0, z: 0, wl: 1, wr: 3 }, { x: 10, z: 0, wl: 1, wr: 3 }] };
+  const b = { ...base, id: 'b', points: [{ x: 20, z: 0, wl: 1, wr: 3 }, { x: 10, z: 0, wl: 1, wr: 3 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  const ja = j.get('a').joints.end, jb = j.get('b').joints.end;
+  // esquerda de A = direita de B no mundo: média (1+3)/2 = 2 nos dois
+  assert.equal(ja.hl, 2); assert.equal(ja.hr, 2);
+  assert.ok(Math.abs(ja.nx + jb.nx) < 1e-9 && Math.abs(ja.nz + jb.nz) < 1e-9);
+});
+
+test('ramificação oblíqua: cada parede termina exatamente na linha do pai', () => {
+  const a = { ...base, id: 'a', points: [{ x: -20, z: 0 }, { x: 20, z: 0 }] };
+  const b = { ...base, id: 'b', width: 2, points: [{ x: 0, z: 0 }, { x: 10, z: -10 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  const t = j.get('b').trims.start;
+  // eixo de A em z=0; meia-largura 2; parede de A com centro em |z| = 2.15
+  for (const side of [1, -1]) {
+    assert.ok(Math.abs(Math.abs(t.sides[side].wallPt.z) - 2.15) < 1e-6, 'parede de B encosta no centro da parede de A');
+    assert.ok(Math.abs(Math.abs(t.sides[side].floorPt.z) - 1.98) < 1e-6, 'piso de B encosta na borda do piso de A');
+  }
+  assert.notEqual(t.sides[1].walls.toFixed(3), t.sides[-1].walls.toFixed(3), 'lados diferentes em ângulo');
+  const cut = j.get('a').cuts[0];
+  assert.ok(cut.s1 - cut.s0 > 2 * Math.SQRT2 * 1 - 0.5);
+});
+
+test('lado de dentro de curva fechada não dobra', () => {
+  const pts = [{ x: 0, z: 0, s: 0 }, { x: 5, z: 0, s: 5 }, { x: 5.5, z: 0.5, s: 5.7 }, { x: 5.5, z: 5, s: 10 }];
+  const fr = computeFrames(pts);
+  // offset maior que o raio do lado de dentro (esquerda = -z... dentro da curva = +z => lado direito)
+  const inner = offsetPoints(pts, fr, -3);
+  const u = untangle(inner, { ref: pts, keepLength: true });
+  for (let i = 0; i < u.length - 1; i++) {
+    const ox = u[i + 1].x - u[i].x, oz = u[i + 1].z - u[i].z;
+    const cx = pts[i + 1].x - pts[i].x, cz = pts[i + 1].z - pts[i].z;
+    assert.ok(ox * cx + oz * cz >= -1e-9, `segmento ${i} não anda para trás`);
+  }
+});

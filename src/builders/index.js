@@ -1,6 +1,6 @@
 // Converte objetos do documento em grupos Three.js (procedural).
 import * as THREE from 'three';
-import { samplePath, computeFrames, offsetPoints, signedArea } from '../math/curve.js';
+import { samplePath, computeFrames, offsetPoints, signedArea, untangle } from '../math/curve.js';
 import { floorGeometry, slabGeometry, wallGeometry, boxBetween, ribbon, sharedGeometry } from '../render/geometry.js';
 import { makeMesh } from '../render/materials.js';
 import { buildWallLine } from './walls.js';
@@ -80,16 +80,43 @@ function buildCorridor(o, ctx) {
   const { samples: raw, stepped } = corridorSamples(o, ctx);
   if (raw.length < 2) return group;
   const closed = o.closed;
-  const J = ctx.junctions?.().get(o.id) || { cuts: [], trims: {} };
+  const J = ctx.junctions?.().get(o.id) || { cuts: [], trims: {}, joints: {} };
+  const joints = closed ? {} : (J.joints || {});
   const L = raw[raw.length - 1].s;
   const trim = (end, key) => J.trims[end]?.[key] || 0;
+  // Emendas: perto da ponta a largura converge para a largura comum da emenda
+  const D = Math.min(3, L * 0.45);
+  const halfS = (p, side) => {
+    let h = halfAt(o, p.ctrl, side);
+    const js = joints.start, je = joints.end;
+    if (js) h = lerp(h, side > 0 ? js.hl : js.hr, smoothstep(Math.max(0, 1 - p.s / D)));
+    if (je) h = lerp(h, side > 0 ? je.hl : je.hr, smoothstep(Math.max(0, 1 - (L - p.s) / D)));
+    return h;
+  };
+  // ... e a normal na ponta é a mesma dos dois corredores (bissetriz)
+  const jointFrames = (sm, fr) => {
+    if (joints.start && sm[0].s < 1e-4) fr[0] = { ...joints.start, miter: 1 };
+    if (joints.end && sm[sm.length - 1].s > L - 1e-4) fr[fr.length - 1] = { ...joints.end, miter: 1 };
+    return fr;
+  };
+  // Ramificação: cada lado termina exatamente no seu cruzamento com o pai
+  const pinEnds = (line, side, key) => {
+    for (const end of ['start', 'end']) {
+      const pt = J.trims[end]?.sides?.[side]?.[key];
+      if (!pt) continue;
+      const k = end === 'start' ? 0 : line.length - 1;
+      line[k] = { ...line[k], x: pt.x, z: pt.z };
+    }
+    return line;
+  };
   const samples = closed ? raw : trimRange(raw, trim('start', 'floor'), L - trim('end', 'floor'));
   if (samples.length < 2) return group;
-  const frames = computeFrames(samples, closed);
-  const hl = (i) => halfAt(o, samples[i].ctrl, 1);
-  const hr = (i) => halfAt(o, samples[i].ctrl, -1);
-  const left = offsetPoints(samples, frames, hl);
-  const right = offsetPoints(samples, frames, (i) => -hr(i));
+  const frames = jointFrames(samples, computeFrames(samples, closed));
+  const hl = (i) => halfS(samples[i], 1);
+  const hr = (i) => halfS(samples[i], -1);
+  // curvas mais fechadas que a largura: o lado de dentro não pode dobrar sobre si
+  const left = pinEnds(untangle(offsetPoints(samples, frames, hl), { keepLength: true, ref: samples }), 1, 'floorPt');
+  const right = pinEnds(untangle(offsetPoints(samples, frames, (i) => -hr(i)), { keepLength: true, ref: samples }), -1, 'floorPt');
 
   if (o.floor.enabled) {
     const fl = makeMesh(floorGeometry(left, right, o.floor.thickness, { closed }), o.floor.color, { threshold: 30 });
@@ -110,13 +137,13 @@ function buildCorridor(o, ctx) {
     extra = stepped.step;
   }
   const wallSamples = closed ? wallBase : trimRange(wallBase, trim('start', 'walls'), L - trim('end', 'walls'));
-  const wallFrames = computeFrames(wallSamples, closed);
+  const wallFrames = wallSamples.length >= 2 ? jointFrames(wallSamples, computeFrames(wallSamples, closed)) : [];
   // corredores não têm vãos aleatórios: aberturas só onde outro corredor sai
   const proc = { ...o.proc, gapChance: 0 };
   for (const side of sides) {
     if (wallSamples.length < 2) break;
-    const center = offsetPoints(wallSamples, wallFrames, (i) => side * (halfAt(o, wallSamples[i].ctrl, side) + W.thickness / 2));
-    const cuts = J.cuts.filter((c) => c.side === side).map((c) => ({ s0: c.s - c.half, s1: c.s + c.half, c }));
+    const center = untangle(pinEnds(offsetPoints(wallSamples, wallFrames, (i) => side * (halfS(wallSamples[i], side) + W.thickness / 2)), side, 'wallPt'), { ref: wallSamples });
+    const cuts = J.cuts.filter((c) => c.side === side).map((c) => ({ s0: c.s0 ?? c.s - c.half, s1: c.s1 ?? c.s + c.half, c }));
     group.add(buildWallLine(center, {
       height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,
     }));
@@ -145,8 +172,8 @@ function buildCorridor(o, ctx) {
       const b = offsetPoints([samples[i]], [frames[i]], -hr(i) - W.thickness)[0];
       return makeMesh(boxBetween(a, b, W.thickness, samples[i].y, W.height), W.color);
     };
-    if (W.capStart && !J.trims.start) group.add(capW(0));
-    if (W.capEnd && !J.trims.end) group.add(capW(samples.length - 1));
+    if (W.capStart && !J.trims.start && !joints.start) group.add(capW(0));
+    if (W.capEnd && !J.trims.end && !joints.end) group.add(capW(samples.length - 1));
   }
 
   const decoSides = o.deco.side === 'left' ? [1] : o.deco.side === 'right' ? [-1] : [1, -1];
