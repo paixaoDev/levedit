@@ -30,6 +30,7 @@ export const TYPE_DEFAULTS = {
     width: 4,
     endLevelId: null,
     groupId: null,
+    links: { start: null, end: null },
     joins: { start: 'door', end: 'door' },
     rampStyle: 'ramp',
     stepHeight: 0.25,
@@ -200,8 +201,8 @@ export function sampleDoc() {
   });
   objs.push(ramp);
   objs.push(makeObject('corridor', {
-    name: 'Corredor alto', levelId: l1.id, smooth: 0.5, width: 5,
-    points: [{ x: 24, z: 20 }, { x: 24, z: 30, wl: 4.5, wr: 3.5 }, { x: 10, z: 34 }, { x: -4, z: 30 }],
+    id: 'cor_sample_alto', name: 'Corredor alto', levelId: l1.id, smooth: 0.5, width: 5,
+    points: [{ x: 24, z: 20 }, { x: 24, z: 25, jid: 'jsaida' }, { x: 24, z: 30, wl: 4.5, wr: 3.5 }, { x: 10, z: 34 }, { x: -4, z: 30 }],
     walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'blocks', capStart: false, capEnd: false },
     proc: { seed: 9, gapChance: 0.08, gapLength: 1, heightVar: 0.35, jitter: 0.15, segment: 1.5 },
     deco: { type: 'rocks', side: 'both', density: 0.5, color: '#b9a88a', inset: 0.8, seed: 5 },
@@ -211,6 +212,7 @@ export function sampleDoc() {
     points: [{ x: 24, z: 25 }, { x: 34, z: 25 }, { x: 40, z: 31 }],
     walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: true },
     joins: { start: 'door', end: 'door' },
+    links: { start: { id: 'cor_sample_alto', jid: 'jsaida' }, end: null },
   }));
   objs.push(makeObject('area', {
     name: 'Mezanino', levelId: l1.id,

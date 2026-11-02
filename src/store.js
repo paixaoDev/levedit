@@ -1,6 +1,7 @@
 // Store do documento: mutações, undo/redo por snapshot e autosave local.
 import { normalizeDoc, sampleDoc } from './model.js';
 import { debounce, deepClone } from './util.js';
+import { syncLinks } from './builders/corridorPath.js';
 
 const STORAGE_KEY = 'levedit.doc.v1';
 const MAX_HISTORY = 120;
@@ -52,6 +53,7 @@ export class Store extends EventTarget {
   mutate(fn, { ids = null, all = false, record = true, structure = false } = {}) {
     if (record) this.snapshot();
     fn(this.doc);
+    syncLinks(this.doc);
     this.emit({ ids, all, structure });
     this._autosave();
   }
