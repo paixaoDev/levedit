@@ -37,7 +37,7 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
   Ao engordar (ou ao mover um nó do meio), um corredor vizinho sem agentes é empurrado: os nós dele mais
   próximos se afastam. Se o vizinho tem agentes, ou é parede/área, a parede só para rente (Alt atravessa).
-  Se mesmo assim dois corredores se sobrepõem, o mais novo encosta no mais antigo: a parede dele segue a face
+  Se mesmo assim dois corredores se sobrepõem, o editado por último encosta no outro: a parede dele segue a face
   da parede do outro, sem entrar (uma ramificação faz o mesmo com o pai, fora da porta).
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,
   decoração) e conecta as pontas mais próximas ao primeiro selecionado. Ctrl+Shift+G desagrupa.
