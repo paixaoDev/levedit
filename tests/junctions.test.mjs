@@ -177,3 +177,19 @@ test('áreas encostadas ganham uma porta na parede em comum', () => {
   a.joins = { areas: 'none' };
   assert.equal(computeJunctions(ctxFor([a, b])).get('a').cuts.length, 0);
 });
+
+test('corredor mais novo engordado encosta no mais antigo sem entrar', () => {
+  const walls = { left: true, right: true, height: 3, thickness: 0.3 };
+  const a = { ...base, id: 'a', walls, points: [{ x: 0, z: -10 }, { x: 0, z: 10 }] };
+  // b (mais novo) a 8 m de a, com o lado direito (-x, indo em +z) engordado para 12
+  const b = { ...base, id: 'b', walls, points: [{ x: 8, z: -10 }, { x: 8, z: 0, wr: 12 }, { x: 8, z: 10 }] };
+  const j = computeJunctions(ctxFor([a, b]));
+  const clamp = j.get('b').clamp;
+  assert.ok(clamp, 'b recebe limite');
+  const f = { nx: 1, nz: 0, miter: 1 }; // normal esquerda de +z é +x; lado direito = -x
+  const h = clamp({ x: 8, z: 0, s: 10 }, f, -1);
+  // face externa de a em x = 2.3; b precisa da própria parede (0.3) e folga 0.02
+  assert.ok(Math.abs(h - (8 - 2.3 - 0.3 - 0.02)) < 1e-6, `meia-largura ${h}`);
+  // o mais antigo não muda
+  assert.equal(j.get('a').clamp, undefined);
+});
