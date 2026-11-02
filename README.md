@@ -35,7 +35,8 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
   abertura ou nada). Áreas encostadas ganham uma porta no meio da parede em comum (largura ajustável).
   Áreas também não têm vãos aleatórios.
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
-  Ao engordar, a parede para ao encostar em outro corredor, parede ou área (Alt atravessa).
+  Ao engordar (ou ao mover um nó do meio), um corredor vizinho sem agentes é empurrado: os nós dele mais
+  próximos se afastam. Se o vizinho tem agentes, ou é parede/área, a parede só para rente (Alt atravessa).
   Se mesmo assim dois corredores se sobrepõem, o mais novo encosta no mais antigo: a parede dele segue a face
   da parede do outro, sem entrar (uma ramificação faz o mesmo com o pai, fora da porta).
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,

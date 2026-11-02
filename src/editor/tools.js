@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
-import { nodeHalf, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines } from '../builders/corridorPath.js';
+import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor } from '../builders/corridorPath.js';
 import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -304,10 +304,36 @@ export class Tools extends EventTarget {
       const branch = cur?.type === 'corridor' && isEnd;
       const p = this.snapPoint(hit, e.altKey, d.id, branch, d.y);
       if (branch) this._showLinkHint(p, hit, d.y, d.id);
+      // nó do meio de um corredor: não entra em outro objeto (empurra corredores sem agentes)
+      const guard = cur?.type === 'corridor' && !isEnd && !e.altKey;
+      const ids = [d.id];
+      let res = null, at = null;
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
-        if (o?.points[d.index]) o.points[d.index] = { ...o.points[d.index], x: p.x, z: p.z };
-      }, { ids: [d.id], record: record && !d.endName });
+        if (!o?.points[d.index]) return;
+        const prev = { ...o.points[d.index] };
+        const place = (t) => { o.points[d.index] = { ...prev, x: lerp(prev.x, p.x, t), z: lerp(prev.z, p.z, t) }; };
+        if (!guard) { place(1); return; }
+        const ctx = this.vp.ctx;
+        const ignore = new Set(nodeCollisions(doc, ctx, o, d.index).keys()); // já encostava antes
+        place(1);
+        res = this._pushAway(doc, o, d.index, { ignore });
+        ids.push(...res.pushed);
+        const obstacles = obstacleLines(doc, ctx, o);
+        const bad = () => [...nodeCollisions(doc, ctx, o, d.index, { obstacles }).keys()].some((id) => !ignore.has(id));
+        if (bad()) {
+          let lo = 0, hi = 1;
+          for (let k = 0; k < 7; k++) {
+            const mid = (lo + hi) / 2;
+            place(mid);
+            if (bad()) hi = mid; else lo = mid;
+          }
+          place(lo);
+          res.blocked = true;
+        }
+        at = o.points[d.index];
+      }, { ids, record: record && !d.endName });
+      if (guard) this._overlapTip(res, at, d.y);
     } else if (d.kind === 'edge') {
       // largura do corredor neste nó (quina esquerda/direita)
       const o = this.store.get(d.id);
@@ -317,28 +343,35 @@ export class Tools extends EventTarget {
       const st = this.store.doc.settings;
       if (st.snap && !e.altKey) w = snap(w, 0.25);
       w = Math.max(0.3, Math.min(40, w));
-      // não deixa a parede entrar em outro corredor/parede/área (Alt atravessa)
+      // não deixa a parede entrar em outro objeto: corredores sem agentes são
+      // empurrados (os nós mais próximos), o resto bloqueia (Alt atravessa)
       const both = d.both || e.shiftKey;
-      let blocked = false;
-      if (!e.altKey) {
-        if (!d.obstacles) d.obstacles = obstacleLines(this.store.doc, this.vp.ctx, o);
-        for (const side of both ? [1, -1] : [d.side]) {
-          const lim = widthLimit(this.store.doc, this.vp.ctx, o, d.index, side, d.obstacles);
-          if (w > lim) { w = Math.max(Math.min(w, nodeHalf(o, d.index, side)), lim, 0.3); blocked = true; }
-        }
-      }
+      const sides = both ? [1, -1] : [d.side];
+      const ids = [d.id];
+      let res = null;
       this.store.mutate((doc) => {
-        const pt = doc.objects.find((x) => x.id === d.id).points[d.index];
-        if (both) { pt.wl = w; pt.wr = w; } else pt[d.side > 0 ? 'wl' : 'wr'] = w;
-      }, { ids: [d.id], record });
-      if (blocked) {
-        const q = { x: P.x + fr.nx * w * d.side, z: P.z + fr.nz * w * d.side };
-        this.linkTip.textContent = 'Encostou em outro objeto · Alt atravessa';
-        this.linkTip.classList.add('join');
-        this._linkAt = new THREE.Vector3(q.x, d.y, q.z);
-        this.linkTip.hidden = false;
-        this._placeLinkTip();
-      } else this._clearLinkHint();
+        const ob = doc.objects.find((x) => x.id === d.id);
+        const setW = (v) => {
+          const q = { ...ob.points[d.index] };
+          for (const sd of sides) q[sd > 0 ? 'wl' : 'wr'] = v;
+          ob.points[d.index] = q;
+        };
+        if (e.altKey) { setW(w); return; }
+        const ctx = this.vp.ctx;
+        const before = { ...ob, points: ob.points.map((q) => ({ ...q })) };
+        setW(w);
+        res = this._pushAway(doc, ob, d.index, { sides, minHalf: (q, sd) => halfAt(before, q.ctrl, sd) });
+        ids.push(...res.pushed);
+        // o que sobrou (áreas, paredes, corredores com agentes) limita a largura
+        ob.points[d.index] = before.points[d.index];
+        const obstacles = obstacleLines(doc, ctx, ob);
+        for (const side of sides) {
+          const lim = widthLimit(doc, ctx, ob, d.index, side, obstacles);
+          if (w > lim) { w = Math.max(Math.min(w, nodeHalf(ob, d.index, side)), lim, 0.3); res.blocked = true; }
+        }
+        setW(w);
+      }, { ids, record });
+      this._overlapTip(res, { x: P.x + fr.nx * w * d.side, z: P.z + fr.nz * w * d.side }, d.y);
     } else if (d.kind === 'move') {
       const s = this.store.doc.settings;
       let dx = hit.x - d.start.x, dz = hit.z - d.start.z;
@@ -355,6 +388,46 @@ export class Tools extends EventTarget {
         }
       }, { ids: [d.id], record });
     }
+  }
+
+  /**
+   * Resolve o corredor `o` entrando em outros perto do nó `index`: empurra os
+   * corredores sem agentes; os demais ficam em `stuck` (id -> 'agents' | 'block').
+   */
+  _pushAway(doc, o, index, opts) {
+    const ctx = this.vp.ctx;
+    const pushed = new Set(), stuck = new Map(), agents = new Map();
+    for (let it = 0; it < 4; it++) {
+      const hits = nodeCollisions(doc, ctx, o, index, opts);
+      let moved = false;
+      for (const h of hits.values()) {
+        if (opts.ignore?.has(h.id)) continue;
+        const Y = h.type === 'corridor' ? doc.objects.find((x) => x.id === h.id) : null;
+        if (!Y) { stuck.set(h.id, 'block'); continue; }
+        if (!agents.has(Y.id)) agents.set(Y.id, hasAgents(doc, ctx, Y));
+        if (agents.get(Y.id)) { stuck.set(h.id, 'agents'); continue; }
+        if (h.inside) { stuck.set(h.id, 'block'); continue; } // eixo já dentro: empurrar não resolve
+        if (pushCorridor(doc, ctx, Y, h, h.overflow + 0.05)) { pushed.add(Y.id); moved = true; } else stuck.set(h.id, 'block');
+      }
+      if (!moved) break;
+    }
+    return { pushed: [...pushed], stuck, blocked: false };
+  }
+
+  /** Dica perto do cursor: empurrou / encostou / tem agentes. */
+  _overlapTip(res, at, y) {
+    if (!res || !at || (!res.blocked && !res.pushed.length)) { this._clearLinkHint(); return; }
+    const name = (id) => this.store.get(id)?.name || 'corredor';
+    const withAgents = [...res.stuck].find(([, why]) => why === 'agents');
+    let text;
+    if (res.blocked && withAgents) text = `${name(withAgents[0])} tem agentes: só encosta · Alt atravessa`;
+    else if (res.blocked) text = 'Encostou em outro objeto · Alt atravessa';
+    else text = `Empurrando ${res.pushed.map(name).join(', ')} · Alt atravessa`;
+    this.linkTip.textContent = text;
+    this.linkTip.classList.add('join');
+    this._linkAt = new THREE.Vector3(at.x, y, at.z);
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
   }
 
   _deletePoint(id, index) {
