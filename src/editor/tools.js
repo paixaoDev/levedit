@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
-import { nodeHalf, attachEnd, detachEnd, findAttachTarget, widthLimit, obstacleLines } from '../builders/corridorPath.js';
+import { nodeHalf, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines } from '../builders/corridorPath.js';
 import { computeFrames } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -278,6 +278,9 @@ export class Tools extends EventTarget {
       // eixo/nó de outro corredor: a ponta vira ramificação presa a um nó
       const t = findAttachTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
       if (t) return { x: t.x, z: t.z, snapped: true, branch: true, target: t };
+      // borda/interior de uma área: a ponta abre porta na parede dela
+      const at = findAreaTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
+      if (at) return { x: at.snap ? at.x : p.x, z: at.snap ? at.z : p.z, snapped: at.snap, branch: true, target: at };
     }
     const s = this.store.doc.settings;
     if (s.snap) { out.x = snap(p.x, s.gridSize / 2); out.z = snap(p.z, s.gridSize / 2); }
@@ -452,7 +455,7 @@ export class Tools extends EventTarget {
       if (Math.abs(oy - y) > 1 && Math.abs(this.vp.ctx.levelY(o.endLevelId || o.levelId) - y) > 1) continue;
       o.points.forEach((q, i) => {
         if (Math.hypot(q.x - near.x, q.z - near.z) > 10) return;
-        if (t && t.a.id === o.id && t.node === i) return;
+        if (t && t.a && t.a.id === o.id && t.node === i) return;
         const m = new THREE.Mesh(LINK_GEO.dot, q.jid ? LINK_MAT.dotJoint : LINK_MAT.dot);
         m.position.set(q.x, oy + 0.07, q.z);
         m.rotation.x = -Math.PI / 2;
@@ -462,6 +465,22 @@ export class Tools extends EventTarget {
       });
     }
     if (!t) { this._linkAt = null; this.linkTip.hidden = true; return; }
+    if (t.area) {
+      // porta na parede da área: anel na borda
+      const ring = new THREE.Mesh(LINK_GEO.ring, LINK_MAT.ring);
+      ring.position.set(t.bx, yy, t.bz);
+      ring.rotation.x = -Math.PI / 2;
+      ring.userData.linkHandle = 1.6;
+      ring.userData.pulse = true;
+      ring.renderOrder = 41;
+      this.linkHint.add(ring);
+      this.linkTip.textContent = `Porta na área ${t.area.name || ''}`.trim();
+      this.linkTip.classList.remove('join');
+      this._linkAt = new THREE.Vector3(t.bx, yy, t.bz);
+      this.linkTip.hidden = false;
+      this._placeLinkTip();
+      return;
+    }
     const mat = t.continuation ? LINK_MAT.ringJoin : LINK_MAT.ring;
     const ring = new THREE.Mesh(LINK_GEO.ring, mat);
     ring.position.set(t.x, yy, t.z);

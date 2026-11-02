@@ -57,6 +57,8 @@ export const TYPE_DEFAULTS = {
     smooth: 0,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
     walls: { enabled: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous' },
+    joins: { areas: 'door' },
+    doorWidth: 1.6,
     proc: PROC_DEFAULTS,
     deco: { type: 'none', side: 'inside', density: 0.4, color: '#9bb57a', inset: 0.7, seed: 7 },
   },
@@ -191,7 +193,7 @@ export function sampleDoc() {
     name: 'Praça', levelId: l0.id,
     points: [{ x: -14, z: -10 }, { x: 6, z: -10 }, { x: 6, z: 8 }, { x: -14, z: 8 }],
     walls: { enabled: true, height: 2.5, thickness: 0.3, color: '#ffffff', mode: 'continuous' },
-    proc: { seed: 3, gapChance: 0.12, gapLength: 3, heightVar: 0.15, jitter: 0, segment: 1 },
+    proc: { seed: 3, gapChance: 0, gapLength: 3, heightVar: 0.15, jitter: 0, segment: 1 },
     deco: { type: 'flowers', side: 'inside', density: 0.35, color: '#9bb57a', inset: 0.9, seed: 4 },
   }));
   const ramp = makeObject('corridor', {

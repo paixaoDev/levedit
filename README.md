@@ -31,6 +31,9 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
   abertura livre ou sem abertura. Corredores não têm vãos aleatórios: só abrem onde existe saída.
   Ao arrastar a ponta (ou desenhar) perto de outro corredor, um anel laranja mostra onde ela vai se conectar
   ("Conectar ao nó", "Novo nó" ou "Emendar"), e os nós próximos aparecem como bolinhas.
+- **Áreas e portas**: termine um corredor dentro ou na borda de uma área e a parede da área abre ali (porta,
+  abertura ou nada). Áreas encostadas ganham uma porta no meio da parede em comum (largura ajustável).
+  Áreas também não têm vãos aleatórios.
 - **Largura por nó**: cada nó tem alças nas quinas esquerda/direita para engordar/afinar o corredor só naquele ponto.
   Ao engordar, a parede para ao encostar em outro corredor, parede ou área (Alt atravessa).
 - **Grupos**: Shift+clique em vários corredores e **Ctrl+G** agrupa (estilo compartilhado: paredes, piso, regras,

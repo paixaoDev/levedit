@@ -5,7 +5,7 @@ import { floorGeometry, slabGeometry, wallGeometry, boxBetween, ribbon, sharedGe
 import { makeMesh } from '../render/materials.js';
 import { buildWallLine } from './walls.js';
 import { buildAssetParts, carParts } from './assets.js';
-import { corridorSamples, computeJunctions, halfAt } from './corridorPath.js';
+import { corridorSamples, computeJunctions, halfAt, areaOutline, wrapCut } from './corridorPath.js';
 
 export { corridorSamples };
 import { rng, lerp, smoothstep, shade } from '../util.js';
@@ -73,6 +73,25 @@ function pointAtS(line, sv) {
   const a = line[j - 1], b = line[j];
   const f = b.s - a.s > 1e-6 ? Math.max(0, Math.min(1, (sv - a.s) / (b.s - a.s))) : 0;
   return { x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), y: lerp(a.y ?? 0, b.y ?? 0, f), s: sv };
+}
+
+/** Batente (montantes + verga + parede acima) de uma porta entre s0 e s1 de uma linha de parede. */
+function buildDoorFrame(group, center, s0, s1, c, W, extra = 0) {
+  const a = pointAtS(center, s0), b = pointAtS(center, s1);
+  const y = Math.min(a.y, b.y);
+  const H = W.height + extra;
+  const doorH = Math.min(2.5, c.height - 0.2, H - 0.25);
+  const postW = 0.18;
+  const dx = b.x - a.x, dz = b.z - a.z, dl = Math.hypot(dx, dz) || 1;
+  const ux = dx / dl, uz = dz / dl;
+  const frameColor = shade(W.color, -0.18);
+  const post = (p, dir) => makeMesh(boxBetween(
+    { x: p.x, z: p.z }, { x: p.x + ux * dir * postW, z: p.z + uz * dir * postW },
+    W.thickness + 0.12, y, doorH,
+  ), frameColor);
+  group.add(post(a, 1), post(b, -1));
+  if (H - doorH > 0.05) group.add(makeMesh(boxBetween(a, b, W.thickness, y + doorH, H - doorH), W.color));
+  group.add(makeMesh(boxBetween(a, b, W.thickness + 0.12, y + doorH - 0.12, 0.12), frameColor));
 }
 
 function buildCorridor(o, ctx) {
@@ -147,24 +166,7 @@ function buildCorridor(o, ctx) {
     group.add(buildWallLine(center, {
       height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,
     }));
-    for (const { s0, s1, c } of cuts) {
-      if (c.style !== 'door') continue;
-      const a = pointAtS(center, s0), b = pointAtS(center, s1);
-      const y = Math.min(a.y, b.y);
-      const H = W.height + extra;
-      const doorH = Math.min(2.5, c.height - 0.2, H - 0.25);
-      const postW = 0.18;
-      const dx = b.x - a.x, dz = b.z - a.z, dl = Math.hypot(dx, dz) || 1;
-      const ux = dx / dl, uz = dz / dl;
-      const frameColor = shade(W.color, -0.18);
-      const post = (p, dir) => makeMesh(boxBetween(
-        { x: p.x + ux * dir * 0.0, z: p.z + uz * dir * 0.0 }, { x: p.x + ux * dir * postW, z: p.z + uz * dir * postW },
-        W.thickness + 0.12, y, doorH,
-      ), frameColor);
-      group.add(post(a, 1), post(b, -1));
-      if (H - doorH > 0.05) group.add(makeMesh(boxBetween(a, b, W.thickness, y + doorH, H - doorH), W.color));
-      group.add(makeMesh(boxBetween(a, b, W.thickness + 0.12, y + doorH - 0.12, 0.12), frameColor));
-    }
+    for (const { s0, s1, c } of cuts) if (c.style === 'door') buildDoorFrame(group, center, s0, s1, c, W, extra);
   }
   if (!closed) {
     const capW = (i) => {
@@ -200,25 +202,36 @@ function buildWall(o, ctx) {
 function buildArea(o, ctx) {
   const group = new THREE.Group();
   const y = ctx.levelY(o.levelId);
-  const s = samplePath(o.points, { closed: true, smooth: o.smooth, spacing: o.proc?.segment || 1 });
+  const ol = areaOutline(o, ctx);
+  const s = ol.samples;
   if (s.length < 3) return group;
-  for (const p of s) p.y = y;
   if (o.floor.enabled) {
     const fl = makeMesh(slabGeometry(s, y, o.floor.thickness), o.floor.color, { threshold: 30 });
     fl.userData.floor = true;
     group.add(fl);
   }
-  const frames = computeFrames(s, true);
+  const frames = ol.frames;
   // Sinal "para dentro" no referencial da normal esquerda
-  const inside = signedArea(s) > 0 ? -1 : 1;
+  const inside = ol.inside;
+  // aberturas só onde chega um corredor ou encosta outra área (sem vãos aleatórios)
+  const J = ctx.junctions?.().get(o.id) || { cuts: [] };
+  const cuts = J.cuts.flatMap((c) => wrapCut(c, ol.total).map((w) => ({ s0: w.s0, s1: w.s1, c })));
   if (o.walls.enabled) {
     const center = offsetPoints(s, frames, inside * (o.walls.thickness / 2));
-    group.add(buildWallLine(center, { ...o.walls, proc: o.proc, closed: true }));
+    group.add(buildWallLine(center, { ...o.walls, proc: { ...o.proc, gapChance: 0 }, closed: true, cuts }));
+    // batentes: linha "desenrolada" duas vezes para portas que passam do ponto inicial
+    const ring = [...center, ...center.map((p) => ({ ...p, s: p.s + ol.total })), { ...center[0], s: 2 * ol.total }];
+    for (const c of J.cuts) {
+      if (c.style !== 'door') continue;
+      const [w] = wrapCut({ s0: c.s0, s1: c.s0 + (c.s1 - c.s0) }, ol.total);
+      buildDoorFrame(group, ring, w.s0, w.s0 + (c.s1 - c.s0), c, o.walls);
+    }
   }
   const side = o.deco.side;
   const th = o.walls.enabled ? o.walls.thickness : 0;
-  const inner = { side: inside, edge: th, into: 1 };
-  const outer = { side: -inside, edge: 0, into: 1 };
+  const decoCuts = cuts.map(({ s0, s1 }) => [s0 - 0.8, s1 + 0.8]);
+  const inner = { side: inside, edge: th, into: 1, cuts: decoCuts };
+  const outer = { side: -inside, edge: 0, into: 1, cuts: decoCuts };
   buildDecorations(group, s, frames, o.deco, {
     closed: true, wallHeight: o.walls.height, wallThickness: th, wallColor: o.walls.color,
     sides: side === 'outside' ? [outer] : side === 'both' ? [inner, outer] : [inner],

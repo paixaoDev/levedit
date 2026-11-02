@@ -1,6 +1,6 @@
 // Caminho de um corredor: amostragem com elevação, largura por nó e junções
 // (corredores que nascem de outro corredor abrem uma passagem/porta na parede).
-import { samplePath, closestOnPolyline, computeFrames, offsetPoints, polylineCrossings } from '../math/curve.js';
+import { samplePath, closestOnPolyline, computeFrames, offsetPoints, polylineCrossings, signedArea } from '../math/curve.js';
 import { lerp, smoothstep } from '../util.js';
 
 /** Meia-largura de um nó de controle (side 1 = esquerda, -1 = direita). */
@@ -98,6 +98,161 @@ function crossNearEnd(lineB, lineA, end, L, closedA) {
 }
 
 /**
+ * Contorno de uma área: amostras fechadas, frames e `at(d)` = linha deslocada d
+ * metros para DENTRO (0 = contorno/face externa da parede).
+ */
+export function areaOutline(o, ctx) {
+  const y = ctx.levelY(o.levelId);
+  const sm = samplePath(o.points, { closed: true, smooth: o.smooth, spacing: o.proc?.segment || 1 });
+  for (const p of sm) p.y = y;
+  const fr = sm.length >= 3 ? computeFrames(sm, true) : [];
+  const inside = signedArea(sm) > 0 ? -1 : 1;
+  const n = sm.length;
+  const total = n ? sm[n - 1].s + Math.hypot(sm[0].x - sm[n - 1].x, sm[0].z - sm[n - 1].z) : 0;
+  return { samples: sm, frames: fr, inside, total, y, at: (d) => offsetPoints(sm, fr, inside * d) };
+}
+
+function insidePoly(pts, p) {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.z > p.z) !== (b.z > p.z) && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) c = !c;
+  }
+  return c;
+}
+
+/** Área (do mesmo nível) que contém E ou cuja borda está a menos de `margin` de E. */
+function areaAt(areas, E, Ey, margin = 0.6) {
+  let best = null;
+  for (const ar of areas) {
+    const { ol } = ar;
+    if (ol.samples.length < 3 || Math.abs(ol.y - Ey) > 1) continue;
+    const c = closestOnPolyline(ol.samples, E, true);
+    if (!c) continue;
+    const inside = insidePoly(ol.samples, E);
+    if (!inside && c.d > margin) continue;
+    const score = inside ? -1 / (1 + c.d) : c.d;
+    if (!best || score < best.score) best = { ...ar, c, inside, score };
+  }
+  return best;
+}
+
+/** Normaliza um corte [s0, s1] numa linha fechada de comprimento `total` (pode virar dois). */
+export function wrapCut(c, total) {
+  if (!total) return [c];
+  let { s0, s1 } = c;
+  while (s0 < 0) { s0 += total; s1 += total; }
+  while (s0 >= total) { s0 -= total; s1 -= total; }
+  if (s1 <= total) return [{ ...c, s0, s1 }];
+  return [{ ...c, s0, s1: total }, { ...c, s0: 0, s1: s1 - total }];
+}
+
+/**
+ * Liga a ponta `end` do corredor `b` a um "pai" P (corredor ou área), dado por
+ * linhas paralelas à parede dele: edge (piso, levemente para dentro), inner
+ * (face interna), center (centro da parede) e outer (face externa). Calcula os
+ * recortes de B e a abertura na parede de P.
+ */
+function connectEnd(info, b, end, ei, fb, P) {
+  const { sb, idx } = ei;
+  const style = b.joins?.[end] || 'door';
+  const hb = (nodeHalf(b, idx, 1) + nodeHalf(b, idx, -1)) / 2;
+  const thB = b.walls.thickness;
+  const Lb = sb[sb.length - 1].s;
+  const reach = (P.depth + P.th + 2) / P.sinA + hb + 2 + (P.area ? Lb : 0);
+  const trim = { floor: 0, walls: 0, style, sides: {} };
+  const fallbackFloor = Math.max(0, (P.depth - 0.02) / P.sinA);
+  const fallbackWalls = (P.depth + (style === 'none' ? 0 : P.th / 2)) / P.sinA;
+  const faces = [];
+  for (const bs of [1, -1]) {
+    const bEdge = nearEnd(sideLine(b, sb, fb, bs, 0), end, reach);
+    const bWall = nearEnd(sideLine(b, sb, fb, bs, thB / 2), end, reach);
+    const fl = crossNearEnd(bEdge, P.edge, end, Lb, P.closed);
+    const wl = crossNearEnd(bWall, style === 'none' ? P.inner : P.center, end, Lb, P.closed);
+    trim.sides[bs] = {
+      floor: fl ? fl.dist : fallbackFloor, floorPt: fl ? { x: fl.x, z: fl.z } : null,
+      walls: wl ? wl.dist : fallbackWalls, wallPt: wl ? { x: wl.x, z: wl.z } : null,
+    };
+    // face interna da parede de B cruzando a faixa da parede de P
+    const fi = crossNearEnd(bEdge, P.inner, end, Lb, P.closed);
+    const fo = crossNearEnd(bEdge, P.outer, end, Lb, P.closed);
+    if (fi || fo) faces.push([fi?.sQ ?? fo.sQ, fo?.sQ ?? fi.sQ]);
+  }
+  trim.floor = Math.max(trim.sides[1].floor, trim.sides[-1].floor);
+  trim.walls = Math.max(trim.sides[1].walls, trim.sides[-1].walls);
+  info.get(b.id).trims[end] = trim;
+  if (style === 'none') return;
+  let s0, s1;
+  if (faces.length === 2) {
+    let [p, q] = faces;
+    if (P.closed && P.total) {
+      // na linha fechada, aproxima q de p (pode ter dado a volta)
+      const mp = (p[0] + p[1]) / 2;
+      q = q.map((v) => v + Math.round((mp - v) / P.total) * P.total);
+    }
+    if ((p[0] + p[1]) / 2 > (q[0] + q[1]) / 2) [p, q] = [q, p];
+    // a parede de P vai até onde a face de B sai da faixa (sem fresta)
+    s0 = Math.max(p[0], p[1]);
+    s1 = Math.min(q[0], q[1]);
+    if (s1 - s0 < 0.2) { const m = (s0 + s1) / 2; s0 = m - 0.1; s1 = m + 0.1; }
+  } else {
+    s0 = P.s - hb / P.sinA; s1 = P.s + hb / P.sinA;
+  }
+  info.get(P.id).cuts.push({
+    side: P.side, s0, s1, s: (s0 + s1) / 2, half: (s1 - s0) / 2, style, from: b.id, y: P.y,
+    wallH: P.wallH, height: Math.min(b.walls.height, P.wallH),
+  });
+}
+
+/** Porta entre duas áreas cujas paredes correm juntas (encostadas). */
+function sharedDoors(info, A, B) {
+  const a = A.o, b = B.o;
+  if (Math.abs(A.ol.y - B.ol.y) > 1) return;
+  const style = a.joins?.areas || 'door';
+  if (style === 'none' || (b.joins?.areas || 'door') === 'none') return;
+  const tol = (a.walls.enabled ? a.walls.thickness : 0) + (b.walls.enabled ? b.walls.thickness : 0) + 0.3;
+  const sa = A.ol.samples, n = sa.length;
+  // amostra fina do contorno de A marcando o que corre junto ao contorno de B
+  const step = 0.25;
+  const marks = [];
+  for (let k = 0; k < n; k++) {
+    const p = sa[k], q = sa[(k + 1) % n];
+    const s0 = p.s, len = Math.hypot(q.x - p.x, q.z - p.z);
+    const tx = (q.x - p.x) / (len || 1), tz = (q.z - p.z) / (len || 1);
+    for (let t = 0; t < len; t += step) {
+      const P = { x: p.x + tx * t, z: p.z + tz * t };
+      const c = closestOnPolyline(B.ol.samples, P, true);
+      const par = c ? Math.abs(c.tx * tx + c.tz * tz) : 0;
+      marks.push({ s: s0 + t, ok: !!c && c.d < tol && par > 0.9, P, c });
+    }
+  }
+  if (!marks.length) return;
+  // trechos contínuos (com volta no fim)
+  let startIdx = marks.findIndex((m) => !m.ok);
+  if (startIdx < 0) return; // B cobre A inteira: não é parede compartilhada
+  const runs = [];
+  let run = null;
+  for (let i = 1; i <= marks.length; i++) {
+    const m = marks[(startIdx + i) % marks.length];
+    if (m.ok) { if (!run) run = []; run.push(m); } else if (run) { runs.push(run); run = null; }
+  }
+  if (run) runs.push(run);
+  const doorW = Math.max(0.8, a.doorWidth || 1.6);
+  for (const r of runs) {
+    const len = r.length * step;
+    if (len < doorW + 0.6) continue;
+    const mid = r[Math.floor(r.length / 2)];
+    const w = Math.min(doorW, len - 0.6) / 2;
+    const height = Math.min(a.walls.height, b.walls.height);
+    const base = { style, y: A.ol.y, height, from: null, side: 0 };
+    info.get(a.id).cuts.push({ ...base, s0: mid.s - w, s1: mid.s + w, s: mid.s, half: w, from: b.id, wallH: a.walls.height });
+    // em B o mesmo vão, sem batente duplicado
+    const sB = mid.c.s;
+    info.get(b.id).cuts.push({ ...base, style: style === 'door' ? 'open' : style, s0: sB - w, s1: sB + w, s: sB, half: w, from: a.id, wallH: b.walls.height });
+  }
+}
+
+/**
  * Detecta junções entre corredores.
  * - Ramificação: ponta de B sobre o eixo de A. A parede de A abre exatamente entre
  *   as faces internas das paredes de B; paredes e piso de B terminam exatamente nas
@@ -109,6 +264,10 @@ function crossNearEnd(lineB, lineA, end, L, closedA) {
 export function computeJunctions(ctx) {
   const corridors = ctx.doc.objects.filter((o) => o.type === 'corridor' && o.points.length >= 2);
   const info = new Map(corridors.map((o) => [o.id, { cuts: [], trims: {}, joints: {} }]));
+  const areas = ctx.doc.objects.filter((o) => o.type === 'area' && o.points.length >= 3).map((o) => {
+    info.set(o.id, { cuts: [] });
+    return { o, ol: areaOutline(o, ctx) };
+  });
   const paths = new Map(corridors.map((o) => [o.id, corridorSamples(o, ctx).samples]));
   const frameCache = new Map();
   const framesOf = (o) => {
@@ -190,60 +349,38 @@ export function computeJunctions(ctx) {
         if (!link && !a.closed && (c.s < 0.6 || c.s > L - 0.6)) continue;
         if (!best || c.d < best.c.d) best = { a, c, side, halfA, ctrl };
       }
-      if (!best) continue;
-      const { a, c, side, halfA } = best;
-      const style = b.joins?.[end] || 'door';
-      const sinA = Math.max(0.35, Math.abs(c.tx * dir.z - c.tz * dir.x));
-      const hb = (nodeHalf(b, idx, 1) + nodeHalf(b, idx, -1)) / 2;
-      const thA = a.walls.thickness, thB = b.walls.thickness;
-      const sa = paths.get(a.id), fa = framesOf(a), fb = framesOf(b);
-      const Lb = sb[sb.length - 1].s;
-      const reach = (halfA + thA + 2) / sinA + hb + 2;
-      const ext = (line) => (a.closed ? line : extendLine(line, 8));
-      const aEdge = ext(sideLine(a, sa, fa, side, -0.02));
-      const aInner = ext(sideLine(a, sa, fa, side, 0));
-      const aCenter = ext(sideLine(a, sa, fa, side, thA / 2));
-      const aOuter = ext(sideLine(a, sa, fa, side, thA));
-
-      const trim = { floor: 0, walls: 0, style, sides: {} };
-      const fallbackFloor = Math.max(0, (halfA - 0.02) / sinA);
-      const fallbackWalls = (halfA + (style === 'none' ? 0 : thA / 2)) / sinA;
-      const faces = [];
-      for (const bs of [1, -1]) {
-        const bEdge = nearEnd(sideLine(b, sb, fb, bs, 0), end, reach);
-        const bWall = nearEnd(sideLine(b, sb, fb, bs, thB / 2), end, reach);
-        const fl = crossNearEnd(bEdge, aEdge, end, Lb, a.closed);
-        const wl = crossNearEnd(bWall, style === 'none' ? aInner : aCenter, end, Lb, a.closed);
-        trim.sides[bs] = {
-          floor: fl ? fl.dist : fallbackFloor, floorPt: fl ? { x: fl.x, z: fl.z } : null,
-          walls: wl ? wl.dist : fallbackWalls, wallPt: wl ? { x: wl.x, z: wl.z } : null,
-        };
-        // face interna da parede de B cruzando a faixa da parede de A
-        const fi = crossNearEnd(bEdge, aInner, end, Lb, a.closed);
-        const fo = crossNearEnd(bEdge, aOuter, end, Lb, a.closed);
-        if (fi || fo) faces.push([fi?.sQ ?? fo.sQ, fo?.sQ ?? fi.sQ]);
-      }
-      trim.floor = Math.max(trim.sides[1].floor, trim.sides[-1].floor);
-      trim.walls = Math.max(trim.sides[1].walls, trim.sides[-1].walls);
-      info.get(b.id).trims[end] = trim;
-
-      if (style !== 'none') {
-        let s0, s1;
-        if (faces.length === 2) {
-          const [p, q] = (faces[0][0] + faces[0][1]) / 2 <= (faces[1][0] + faces[1][1]) / 2 ? faces : [faces[1], faces[0]];
-          // a parede de A vai até onde a face de B sai da faixa (sem fresta)
-          s0 = Math.max(p[0], p[1]);
-          s1 = Math.min(q[0], q[1]);
-          if (s1 - s0 < 0.2) { const m = (s0 + s1) / 2; s0 = m - 0.1; s1 = m + 0.1; }
-        } else {
-          s0 = c.s - hb / sinA; s1 = c.s + hb / sinA;
-        }
-        info.get(a.id).cuts.push({
-          side, s0, s1, s: (s0 + s1) / 2, half: (s1 - s0) / 2, style, from: b.id, y: c.y,
-          wallH: a.walls.height, height: Math.min(b.walls.height, a.walls.height),
+      if (best) {
+        const { a, c, side, halfA } = best;
+        const sa = paths.get(a.id), fa = framesOf(a);
+        const ext = (line) => (a.closed ? line : extendLine(line, 8));
+        const thA = a.walls.thickness;
+        connectEnd(info, b, end, endInfo(b, end), framesOf(b), {
+          id: a.id, closed: a.closed, th: thA, wallH: a.walls.height, y: c.y, side, s: c.s,
+          sinA: Math.max(0.35, Math.abs(c.tx * dir.z - c.tz * dir.x)), depth: halfA,
+          edge: ext(sideLine(a, sa, fa, side, -0.02)),
+          inner: ext(sideLine(a, sa, fa, side, 0)),
+          center: ext(sideLine(a, sa, fa, side, thA / 2)),
+          outer: ext(sideLine(a, sa, fa, side, thA)),
         });
+        continue;
       }
+      // ---- ponta dentro (ou na borda) de uma área: porta na parede da área
+      if (link) continue;
+      const ar = areaAt(areas, E, Ey);
+      if (!ar) continue;
+      const { o: A, ol, c } = ar;
+      const thA = A.walls.enabled ? A.walls.thickness : 0;
+      connectEnd(info, b, end, endInfo(b, end), framesOf(b), {
+        id: A.id, closed: true, th: thA, wallH: A.walls.height, y: ol.y, side: 0, s: c.s,
+        sinA: Math.max(0.35, Math.abs(c.tx * dir.z - c.tz * dir.x)), depth: 0, area: true, total: ol.total,
+        edge: ol.at(0.02), inner: ol.at(thA), center: ol.at(thA / 2), outer: ol.at(0),
+      });
     }
+  }
+
+  // ---- áreas encostadas: porta no meio de cada trecho de parede compartilhado
+  for (let i = 0; i < areas.length; i++) {
+    for (let k = i + 1; k < areas.length; k++) sharedDoors(info, areas[i], areas[k]);
   }
   return info;
 }
@@ -443,3 +580,23 @@ export function widthLimit(doc, ctx, o, index, side, obstacles = null) {
   return limit;
 }
 export { obstacleLines };
+
+/**
+ * Área onde uma ponta de corredor em p abriria porta. Retorna null ou
+ * { area, x, z (ponto ajustado logo dentro da parede, se perto da borda),
+ *   bx, bz (ponto na borda), snap (perto da borda) }.
+ */
+export function findAreaTarget(doc, ctx, p, y, excludeId) {
+  const areas = doc.objects.filter((o) => o.type === 'area' && o.id !== excludeId && o.points.length >= 3)
+    .map((o) => ({ o, ol: areaOutline(o, ctx) }));
+  const ar = areaAt(areas, p, y, 1.0);
+  if (!ar) return null;
+  const { o, ol, c } = ar;
+  const f = ol.frames[c.i] || { nx: 0, nz: 0 };
+  const th = o.walls.enabled ? o.walls.thickness : 0;
+  const snap = c.d < 1.0;
+  const din = th + 0.5;
+  const x = snap ? c.x + f.nx * ol.inside * din : p.x;
+  const z = snap ? c.z + f.nz * ol.inside * din : p.z;
+  return { area: o, x, z, bx: c.x, bz: c.z, y: ol.y, snap };
+}
