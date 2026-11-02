@@ -10,7 +10,7 @@ import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
 import { customModels } from './builders/assets.js';
 import { makeContext, corridorSamples } from './builders/index.js';
-import { nodeHalf } from './builders/corridorPath.js';
+import { nodeHalf, attachEnd } from './builders/corridorPath.js';
 import { closestOnPolyline } from './math/curve.js';
 import { deepClone, uid } from './util.js';
 
@@ -240,6 +240,8 @@ class App {
           const near = ends.find((q) => Math.hypot(q.x - c.x, q.z - c.z) < half * 1.5);
           const target = near || { x: c.x, z: c.z };
           m.points[idx] = { ...m.points[idx], x: target.x, z: target.z };
+          // lateral: a ponta vira um nó compartilhado do outro corredor
+          if (!near) attachEnd(d, makeContext(d), m, idx === 0 ? 'start' : 'end');
           connected++;
         }
         placed.push(m);

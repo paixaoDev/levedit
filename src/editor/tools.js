@@ -2,8 +2,8 @@
 // área), colocação (assets, agentes, escadas) e alças de pontos de controle.
 import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
-import { buildObject, corridorSamples } from '../builders/index.js';
-import { nodeHalf } from '../builders/corridorPath.js';
+import { buildObject, corridorSamples, makeContext } from '../builders/index.js';
+import { nodeHalf, attachEnd, detachEnd } from '../builders/corridorPath.js';
 import { computeFrames, closestOnPolyline } from '../math/curve.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
@@ -183,7 +183,15 @@ export class Tools extends EventTarget {
 
   _onUp(e) {
     if (this.drag) {
+      const d = this.drag;
       this.drag = null;
+      // soltou a ponta de um corredor sobre outro: vira ramificação (nó compartilhado)
+      if (d.kind === 'point' && d.recorded && d.endName) {
+        this.store.mutate((doc) => {
+          const b = doc.objects.find((x) => x.id === d.id);
+          if (b) attachEnd(doc, makeContext(doc), b, d.endName);
+        }, { ids: [d.id], record: false });
+      }
       this.store.emit({ ids: [], structure: true }); // atualiza painéis
     }
     this._setControls(true);
@@ -282,11 +290,15 @@ export class Tools extends EventTarget {
     if (d.kind === 'point') {
       const cur = this.store.get(d.id);
       const isEnd = cur && !cur.closed && (d.index === 0 || d.index === cur.points.length - 1);
+      if (record && isEnd && cur.type === 'corridor') {
+        d.endName = d.index === 0 ? 'start' : 'end';
+        this.store.mutate((doc) => detachEnd(doc.objects.find((x) => x.id === d.id), d.endName), { ids: [d.id], record: true });
+      }
       const p = this.snapPoint(hit, e.altKey, d.id, cur?.type === 'corridor' && isEnd);
       this.store.mutate((doc) => {
         const o = doc.objects.find((x) => x.id === d.id);
         if (o?.points[d.index]) o.points[d.index] = { ...o.points[d.index], x: p.x, z: p.z };
-      }, { ids: [d.id], record });
+      }, { ids: [d.id], record: record && !d.endName });
     } else if (d.kind === 'edge') {
       // largura do corredor neste nó (quina esquerda/direita)
       const o = this.store.get(d.id);
@@ -379,6 +391,14 @@ export class Tools extends EventTarget {
       const obj = this._draftObject(d.points);
       this.draft = null;
       this.store.addObject(obj);
+      if (obj.type === 'corridor') {
+        this.store.mutate((doc) => {
+          const b = doc.objects.find((x) => x.id === obj.id);
+          const ctx = makeContext(doc);
+          attachEnd(doc, ctx, b, 'start');
+          attachEnd(doc, makeContext(doc), b, 'end');
+        }, { ids: [obj.id], record: false, structure: true });
+      }
       this.setTool('select');
     }
   }
@@ -464,7 +484,8 @@ export class Tools extends EventTarget {
     const closed = o.type === 'area' || o.closed;
     for (let i = 0; i < n; i++) {
       const p = o.points[i];
-      this._addHandle(this.handles, { x: p.x, y: yAt(i) + 0.05, z: p.z }, 'point', { id: o.id, index: i });
+      const h = this._addHandle(this.handles, { x: p.x, y: yAt(i) + 0.05, z: p.z }, 'point', { id: o.id, index: i });
+      if (p.jid) h.material = HANDLE_MAT.draft; // nó de junção (ramificação presa aqui)
     }
     if (o.type === 'corridor' && n >= 2) {
       // alças de largura: quina esquerda e direita de cada nó

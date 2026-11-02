@@ -78,23 +78,26 @@ export function computeJunctions(ctx) {
       const inner = end === 'start' ? 1 : b.points.length - 2;
       const E = b.points[idx];
       const Ey = end === 'start' ? ctx.levelY(b.levelId) : ctx.levelY(b.endLevelId || b.levelId);
-      const dx = b.points[inner].x - E.x, dz = b.points[inner].z - E.z;
+      const sb = paths.get(b.id);
+      const q = end === 'start' ? sb[Math.min(1, sb.length - 1)] : sb[Math.max(0, sb.length - 2)];
+      const dx = (q?.x ?? b.points[inner].x) - E.x, dz = (q?.z ?? b.points[inner].z) - E.z;
       const dl = Math.hypot(dx, dz) || 1;
       const dir = { x: dx / dl, z: dz / dl }; // de E para dentro de B
       let best = null;
+      const link = b.links?.[end];
       for (const a of corridors) {
-        if (a.id === b.id) continue;
+        if (a.id === b.id || (link && a.id !== link.id)) continue;
         const sa = paths.get(a.id);
         const c = closestOnPolyline(sa, E, a.closed);
-        if (!c || Math.abs(c.y - Ey) > 1) continue;
+        if (!c || (!link && Math.abs(c.y - Ey) > 1)) continue;
         const ctrl = sa[c.i].ctrl + ((sa[(c.i + 1) % sa.length].ctrl ?? sa[c.i].ctrl) - sa[c.i].ctrl) * c.f;
         const nx = c.tz, nz = -c.tx; // normal esquerda de A
         const side = dir.x * nx + dir.z * nz >= 0 ? 1 : -1;
         const halfA = halfAt(a, ctrl, side);
-        if (c.d > halfA + 0.35) continue;
+        if (!link && c.d > halfA + 0.35) continue;
         const L = sa[sa.length - 1].s;
         // ponta com ponta (continuação): não corta
-        if (!a.closed && (c.s < 0.6 || c.s > L - 0.6)) continue;
+        if (!link && !a.closed && (c.s < 0.6 || c.s > L - 0.6)) continue;
         if (!best || c.d < best.c.d) best = { a, c, side, halfA, ctrl };
       }
       if (!best) continue;
@@ -118,4 +121,82 @@ export function computeJunctions(ctx) {
     }
   }
   return info;
+}
+
+// ------------------------------------------------------------------ ligações
+// Uma ramificação fica presa a um NÓ do corredor pai: o nó tem um id (jid) e a
+// ponta do corredor filho guarda { id do pai, jid }. Mover o nó move a ponta.
+
+let _jid = 0;
+const newJid = () => `j${Date.now().toString(36)}${(++_jid).toString(36)}`;
+
+/**
+ * Prende a ponta `end` ('start' | 'end') do corredor `b` ao corredor mais
+ * próximo cujo eixo passe por ela: reaproveita um nó perto ou insere um nó novo
+ * no pai exatamente ali. Retorna true se ligou.
+ */
+export function attachEnd(doc, ctx, b, end) {
+  if (b.closed || b.points.length < 2) return false;
+  const idx = end === 'start' ? 0 : b.points.length - 1;
+  const E = b.points[idx];
+  const Ey = end === 'start' ? ctx.levelY(b.levelId) : ctx.levelY(b.endLevelId || b.levelId);
+  let best = null;
+  for (const a of doc.objects) {
+    if (a.type !== 'corridor' || a.id === b.id || a.points.length < 2) continue;
+    const sa = corridorSamples(a, ctx).samples;
+    const c = closestOnPolyline(sa, E, a.closed);
+    if (!c || Math.abs(c.y - Ey) > 1) continue;
+    const ctrl = sa[c.i].ctrl + ((sa[(c.i + 1) % sa.length].ctrl ?? sa[c.i].ctrl) - sa[c.i].ctrl) * c.f;
+    const half = Math.max(halfAt(a, ctrl, 1), halfAt(a, ctrl, -1));
+    if (c.d > half + 1.0) continue;
+    if (!best || c.d < best.c.d) best = { a, c, ctrl };
+  }
+  if (!best) return false;
+  const { a, c, ctrl } = best;
+  const n = a.points.length;
+  // nó existente perto? (pontas do pai = continuação, não ramificação)
+  let k = a.points.findIndex((p) => Math.hypot(p.x - c.x, p.z - c.z) < 1.2);
+  if (k >= 0 && !a.closed && (k === 0 || k === n - 1)) {
+    b.points[idx] = { ...E, x: a.points[k].x, z: a.points[k].z };
+    return false;
+  }
+  if (k < 0) {
+    const seg = Math.min(a.closed ? n - 1 : n - 2, Math.floor(ctrl));
+    const j = (seg + 1) % n;
+    const np = { x: c.x, z: c.z };
+    const pa = a.points[seg], pb = a.points[j];
+    if (pa.wl || pb.wl) np.wl = (nodeHalf(a, seg, 1) + nodeHalf(a, j, 1)) / 2;
+    if (pa.wr || pb.wr) np.wr = (nodeHalf(a, seg, -1) + nodeHalf(a, j, -1)) / 2;
+    a.points.splice(seg + 1, 0, np);
+    k = seg + 1;
+  }
+  const node = a.points[k];
+  if (!node.jid) node.jid = newJid();
+  b.points[idx] = { ...E, x: node.x, z: node.z };
+  b.links = { ...(b.links || {}), [end]: { id: a.id, jid: node.jid } };
+  return true;
+}
+
+export function detachEnd(b, end) {
+  if (b.links?.[end]) {
+    b.links = { ...b.links, [end]: null };
+  }
+}
+
+/** Mantém as pontas ligadas grudadas nos nós dos pais; remove ligações órfãs. */
+export function syncLinks(doc) {
+  const byId = new Map(doc.objects.map((o) => [o.id, o]));
+  for (const b of doc.objects) {
+    if (b.type !== 'corridor' || !b.links) continue;
+    for (const end of ['start', 'end']) {
+      const L = b.links[end];
+      if (!L) continue;
+      const a = byId.get(L.id);
+      const node = a?.points.find((p) => p.jid === L.jid);
+      if (!node || b.closed) { b.links[end] = null; continue; }
+      const idx = end === 'start' ? 0 : b.points.length - 1;
+      const p = b.points[idx];
+      if (p.x !== node.x || p.z !== node.z) b.points[idx] = { ...p, x: node.x, z: node.z };
+    }
+  }
 }

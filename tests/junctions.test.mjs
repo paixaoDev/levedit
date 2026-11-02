@@ -39,3 +39,31 @@ test('largura por nó interpola entre nós', () => {
   assert.equal(nodeHalf(o, 0, -1), 2);
   assert.equal(halfAt(o, 0.5, 1), 2);
 });
+
+import { attachEnd, syncLinks } from '../src/builders/corridorPath.js';
+
+test('ramificação vira nó compartilhado do pai e acompanha o nó', () => {
+  const a = { ...base, id: 'a', points: [{ x: -10, z: 0 }, { x: 10, z: 0 }] };
+  // ponta perto da parede (fora do eixo): deve ser puxada para o eixo
+  const b = { ...base, id: 'b', width: 2, points: [{ x: 3.3, z: -2.6 }, { x: 3, z: -12 }] };
+  const doc = { objects: [a, b] };
+  const ctx = ctxFor(doc.objects);
+  assert.equal(attachEnd(doc, ctx, b, 'start'), true);
+  assert.equal(a.points.length, 3, 'nó inserido no pai');
+  const node = a.points[1];
+  assert.ok(node.jid);
+  assert.ok(Math.abs(node.z) < 1e-6 && Math.abs(b.points[0].z) < 1e-6);
+  assert.deepEqual(b.links.start, { id: 'a', jid: node.jid });
+  // mover o nó do pai move a ponta da ramificação
+  a.points[1] = { ...node, x: 5, z: 1 };
+  syncLinks(doc);
+  assert.equal(b.points[0].x, 5);
+  assert.equal(b.points[0].z, 1);
+  // a junção é detectada e abre a parede do pai
+  const j = computeJunctions(ctxFor(doc.objects));
+  assert.equal(j.get('a').cuts.length, 1);
+  // apagar o nó desfaz a ligação
+  a.points.splice(1, 1);
+  syncLinks(doc);
+  assert.equal(b.links.start, null);
+});
