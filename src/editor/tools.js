@@ -642,30 +642,33 @@ export class Tools extends EventTarget {
   }
 
   _showRailHint(ra) {
-    // linha percorrendo a parede: na face apontada (na altura do cursor) ou no topo
+    // linha percorrendo a face apontada (na altura do cursor) e uma faixa vertical,
+    // do chão ao topo, marcando de onde a parede nova sai
     const { r, side, hy } = ra;
     const pts = r.line.pts;
     const fr = computeFrames(pts, r.line.closed);
-    const d = side * (r.th / 2 + 0.015);
-    const line = offsetPoints(pts, fr, d).map((q) => new THREE.Vector3(q.x, side ? hy : r.top, q.z));
+    const d = side * (r.th / 2 + 0.03);
+    const yLine = side ? hy : r.top;
+    const line = offsetPoints(pts, fr, d).map((q) => new THREE.Vector3(q.x, yLine, q.z));
     if (r.line.closed && line.length) line.push(line[0].clone());
-    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(line), GUIDE_MAT.face);
-    l.renderOrder = 40;
-    l.userData.ownGeometry = true;
-    l.raycast = () => {};
-    this.linkHint.add(l);
-    const c = closestOnPolyline(pts, ra.S, r.line.closed);
-    const k = c ? Math.min(fr.length - 1, c.i) : 0;
-    const at = new THREE.Vector3(ra.S.x + fr[k].nx * d, side ? hy : r.top, ra.S.z + fr[k].nz * d);
-    const ring = new THREE.Mesh(LINK_GEO.core, LINK_MAT.ring);
-    ring.position.copy(at);
-    if (side) ring.lookAt(at.x + fr[k].nx * side, at.y, at.z + fr[k].nz * side);
-    else ring.rotation.x = -Math.PI / 2;
-    ring.userData.linkHandle = 1.1;
-    ring.userData.pulse = true;
-    ring.renderOrder = 41;
-    ring.raycast = () => {};
-    this.linkHint.add(ring);
+    const add = (o) => { o.renderOrder = 40; o.userData.ownGeometry = true; o.raycast = () => {}; this.linkHint.add(o); };
+    add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(line), GUIDE_MAT.face));
+    const tx = ra.tx, tz = ra.tz, nx = -tz, nz = tx;
+    const w = (this.store.doc.objects.find((o) => o.type === 'wall')?.thickness ?? 0.3) / 2;
+    const y0 = r.y + 0.01, y1 = r.top - 0.02;
+    const V = (u, y, o) => new THREE.Vector3(ra.S.x + tx * u + nx * o, y, ra.S.z + tz * u + nz * o);
+    let quad;
+    if (side) {
+      const o = d;
+      quad = [V(-w, y0, o), V(w, y0, o), V(w, y1, o), V(-w, y1, o)];
+    } else {
+      const o = r.th / 2 + 0.01, y = r.top + 0.01;
+      quad = [V(-w, y, -o), V(w, y, -o), V(w, y, o), V(-w, y, o)];
+    }
+    const g = new THREE.BufferGeometry().setFromPoints([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
+    add(new THREE.Mesh(g, GUIDE_MAT.band));
+    add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(quad), GUIDE_MAT.bandEdge));
+    const at = side ? V(0, hy, d) : V(0, r.top, 0);
     this.linkTip.textContent = 'Clique para puxar uma parede daqui';
     this.linkTip.classList.remove('join');
     this._linkAt = at.clone();
@@ -1338,6 +1341,8 @@ const GUIDE_MAT = {
   ring: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, opacity: 0.85 }),
   wall: new THREE.LineBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, opacity: 0.95 }),
   face: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: true, transparent: true, opacity: 0.95, linewidth: 2 }),
+  band: new THREE.MeshBasicMaterial({ color: THEME.accent, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
+  bandEdge: new THREE.LineBasicMaterial({ color: THEME.accent, transparent: true, opacity: 1 }),
   rail: new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.5, gapSize: 0.25, depthTest: false, transparent: true, opacity: 0.95 }),
 };
 
