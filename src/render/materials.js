@@ -144,11 +144,35 @@ export function makeRoofMesh(geometry, color) {
   return mesh;
 }
 
+// Pré-passe de profundidade dos fantasmas: desenha só o depth (sem cor) antes
+// dos pontos. Assim, entre duas superfícies fantasmas, só a da frente aparece;
+// o que está atrás dela some em vez de vazar pelos furos do pontilhado. Objetos
+// normais (desenhados antes) continuam aparecendo entre os pontos.
+const DEPTH_MAT = new THREE.MeshBasicMaterial({ colorWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+const GHOST_ORDER = { depth: 1, color: 2 };
+
+function setDepthTwin(mesh, on) {
+  let twin = mesh.userData.depthTwin;
+  if (on && !twin) {
+    twin = new THREE.Mesh(mesh.geometry, DEPTH_MAT);
+    twin.raycast = () => {};
+    twin.castShadow = twin.receiveShadow = false;
+    twin.renderOrder = GHOST_ORDER.depth;
+    twin.userData.isDepthTwin = true;
+    mesh.userData.depthTwin = twin;
+    mesh.add(twin);
+  }
+  if (twin) twin.visible = on;
+  mesh.renderOrder = on ? GHOST_ORDER.color : 0;
+}
+
 /** Aplica estado visual (normal / fantasma / selecionado) a uma árvore. */
 export function applyVisualState(root, state) {
   const ghost = state === 'ghost';
   root.traverse((o) => {
+    if (o.userData.isDepthTwin) return;
     if (o.isLineSegments && o.userData.isEdge) {
+      o.renderOrder = ghost ? GHOST_ORDER.color : 0;
       if (o.userData.roofEdge) {
         o.material = getEdgeMaterial(roofView === 'hidden' ? 'hidden' : state === 'selected' ? 'selected' : roofView === 'dotted' || ghost ? 'roof' : 'normal');
       } else {
@@ -156,8 +180,10 @@ export function applyVisualState(root, state) {
       }
     } else if (o.isMesh && o.userData.roof) {
       o.material = getRoofMaterial(o.userData.baseColor, ghost);
+      setDepthTwin(o, ghost && roofView !== 'hidden');
     } else if (o.isMesh && o.userData.baseColor) {
       o.material = getMaterial(o.userData.baseColor, ghost);
+      setDepthTwin(o, ghost);
     }
   });
 }
