@@ -6,6 +6,7 @@ import { setByPath } from '../util.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
+import { circleOf, circlePoints } from '../editor/polar.js';
 import { roofFields, lightFields } from './lighting.js';
 import { TOOL_ICONS, UI_ICONS, svgIcon } from './icons.js';
 
@@ -165,6 +166,12 @@ export class Panels {
       el('span', { class: 'badge', html: svgIcon(TOOL_ICONS[t]) }),
       el('div', {}, el('div', { class: 'eyebrow' }, 'Desenhando'), el('div', { class: 'title' }, TOOL_INFO[t].label)),
       el('button', { class: 'btn ghost small', type: 'button', onclick: () => tools.setTool('select'), 'data-tip': 'Voltar a selecionar', 'data-key': 'Esc / V' }, 'Concluir')));
+    // grade polar das salas circulares (vale para Parede e Área)
+    const polarFields = () => [
+      el('p', { class: 'info' }, 'Dentro de uma sala circular os pontos encaixam em anéis e raios; dois pontos no mesmo anel viram arco. Alt solta o ímã.'),
+      field(tools.options.polar, { key: 'step', label: 'Entre anéis (m)', type: 'range', min: 0.5, max: 6, step: 0.25 }, (k, v) => tools.setOption('polar', k, v)),
+      field(tools.options.polar, { key: 'divisions', label: 'Divisões da volta', type: 'range', min: 4, max: 72, step: 1 }, (k, v) => tools.setOption('polar', k, v)),
+    ];
     const levelOpts = () => ({ '': '— mesmo nível —', ...Object.fromEntries(this.store.doc.levels.filter((l) => l.id !== this.store.doc.activeLevelId).map((l) => [l.id, `${l.name} (${l.elevation} m)`])) });
     const onF = (k, v) => set(k, v);
     const add = (...nodes) => box.append(...nodes.filter(Boolean));
@@ -180,9 +187,15 @@ export class Panels {
       box.append(
         field(opt, { key: 'height', label: 'Altura', type: 'range', min: 0.2, max: 10, step: 0.1 }, onF),
         field(opt, { key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }, onF),
+        ...polarFields(),
       );
     } else if (t === 'area') {
-      box.append(field(opt, { key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }, onF));
+      box.append(
+        field(opt, { key: 'shape', label: 'Forma', type: 'select', options: { free: 'Livre (contorno)', circle: 'Sala circular' } }, onF),
+        field(opt, { key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05, show: (x) => x.shape !== 'circle' }, onF),
+        opt.shape === 'circle' ? el('p', { class: 'info' }, 'Clique no centro e depois no raio (ou arraste do centro até o raio).') : null,
+        ...polarFields(),
+      );
     } else if (t === 'connector') {
       box.append(field(opt, { key: 'style', label: 'Tipo', type: 'select', options: { stairs: 'Escada', ramp: 'Rampa' } }, onF));
     } else if (t === 'asset') {
@@ -338,9 +351,11 @@ export class Panels {
       ]));
       box.append(G('Regras procedurais', procFields()));
     } else if (o.type === 'area') {
-      box.append(meta(`${o.points.length} nós`));
+      const circ = circleOf(o);
+      box.append(meta(circ ? `Círculo · raio ${circ.r.toFixed(2)} m` : `${o.points.length} nós`));
       box.append(el('div', { class: 'quick' },
-        F({ key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }),
+        circ ? field({ radius: circ.r }, { key: 'radius', label: 'Raio', type: 'range', min: 0.5, max: 60, step: 0.25 }, (k, v, final) => this.setRadius(o.id, v, final)) : null,
+        circ ? null : F({ key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }),
         F({ key: 'floor.color', label: 'Cor do piso', type: 'color', show: (x) => x.floor.enabled }),
       ));
       const ja = this.app.vp.ctx.junctions?.().get(o.id);
@@ -498,6 +513,20 @@ export class Panels {
       el('span', { class: 'grow' }, `Em grupo com ${members.length - 1} ${members.length - 1 === 1 ? 'corredor' : 'corredores'}`),
       el('button', { class: 'btn ghost small', onclick: () => { this.store.select(null); for (const m of members) this.store.select(m.id, { add: true }); } }, 'Selecionar'),
       el('button', { class: 'btn ghost small', onclick: () => this.change(o.id, 'groupId', null, true) }, 'Sair'));
+  }
+
+  /** Raio de uma sala circular (mantém o centro). */
+  setRadius(id, r, final) {
+    const c = circleOf(this.store.get(id));
+    if (!c || !(r > 0)) return;
+    const record = !this.gesture;
+    this.gesture = !final;
+    this.store.mutate((d) => {
+      const t = d.objects.find((x) => x.id === id);
+      t.points = circlePoints(c.cx, c.cz, Math.max(0.5, r));
+      markEdited(d, t);
+    }, { ids: [id], record });
+    if (final) this.renderProps();
   }
 
   reverseCorridor(id) {

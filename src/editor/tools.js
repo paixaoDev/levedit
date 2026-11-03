@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
 import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
-import { computeFrames } from '../math/curve.js';
+import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
+import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, attachParam, wallLines, nearestWall, onLine } from './polar.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
@@ -14,7 +15,7 @@ const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
 export const TOOL_INFO = {
   select: { label: 'Selecionar', key: 'V', touch: 'Toque para selecionar · 1 dedo gira · 2 dedos movem e dão zoom', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
   corridor: { label: 'Corredor', key: 'C', touch: 'Toque para pôr pontos · Concluir termina', hint: 'Clique para pôr pontos · Enter ou duplo clique termina · Esc cancela' },
-  wall: { label: 'Parede', key: 'W', touch: 'Toque para pôr pontos · toque no primeiro ponto fecha', hint: 'Clique para pôr pontos · Enter termina · clique no primeiro ponto fecha' },
+  wall: { label: 'Parede', key: 'W', touch: 'Toque para pôr pontos · em sala circular os pontos encaixam nos anéis', hint: 'Clique para pôr pontos ou arraste a partir de uma parede para extrudar · em sala circular encaixa nos anéis · Alt solta' },
   area: { label: 'Área', key: 'A', touch: 'Toque para desenhar o contorno · toque no primeiro ponto fecha', hint: 'Desenhe o contorno · clique no primeiro ponto ou Enter para fechar' },
   connector: { label: 'Escada/Rampa', key: 'S', touch: 'Toque para posicionar · liga este andar ao de cima', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
   asset: { label: 'Asset', key: 'O', touch: 'Escolha o asset em Propriedades e toque na cena para colocar', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
@@ -31,7 +32,9 @@ export class Tools extends EventTarget {
     this.options = {
       corridor: { width: 4, endLevelId: null, rampStyle: 'ramp', smooth: 0.5, deco: 'none' },
       wall: { smooth: 0, height: 3 },
-      area: { smooth: 0 },
+      area: { smooth: 0, shape: 'free' },
+      // grade polar das salas circulares: distância entre anéis e divisões da volta
+      polar: { step: 2, divisions: 24 },
       asset: { kind: 'cube', color: '#e9e2d4' },
       agent: { role: 'player', mode: 'fps' },
       connector: { style: 'stairs' },
@@ -45,6 +48,10 @@ export class Tools extends EventTarget {
     this.handles.renderOrder = 10;
     vp.helpers.add(this.handles);
     this.draftLine = null;
+    this.guides = new THREE.Group(); // grade polar e linha-guia da parede
+    this.guides.renderOrder = 18;
+    vp.helpers.add(this.guides);
+    this._guideCache = null;
     this.linkHint = new THREE.Group();
     this.linkHint.renderOrder = 40;
     vp.helpers.add(this.linkHint);
@@ -64,8 +71,8 @@ export class Tools extends EventTarget {
     this.coarse = !!mq?.matches;
     mq?.addEventListener?.('change', (ev) => { this.coarse = ev.matches; });
     this._bind();
-    store.addEventListener('selection', () => this.refreshHandles());
-    store.addEventListener('change', () => this.refreshHandles());
+    store.addEventListener('selection', () => { this._railCache = null; this.refreshHandles(); });
+    store.addEventListener('change', () => { this._guideCache = null; this._railCache = null; this.refreshHandles(); });
     vp.onFrame.push(() => { this._scaleHandles(); this._animateLinkHint(); });
   }
 
@@ -75,6 +82,7 @@ export class Tools extends EventTarget {
     this.tool = t;
     this._clearPreview();
     this._clearLinkHint();
+    this._clearGuides();
     this.vp.dom.style.cursor = t === 'select' ? 'default' : 'crosshair';
     this.dispatchEvent(new CustomEvent('toolchange', { detail: { tool: t } }));
   }
@@ -130,12 +138,29 @@ export class Tools extends EventTarget {
           this.drag = { kind: 'edge', id: h.id, index: h.index, side: h.side, y: h.pos.y, both: e.shiftKey, recorded: false };
           return;
         }
+        if (h.kind === 'radius') {
+          this.drag = { kind: 'radius', id: h.id, y: h.pos.y, recorded: false };
+          return;
+        }
+        if (h.kind === 'center') {
+          const y = this.vp.ctx.levelY(o.levelId);
+          const start = this.vp.groundPoint(ndc, y);
+          if (start) this.drag = { kind: 'move', id: h.id, y, start, recorded: false, orig: deepClone(o.points) };
+          return;
+        }
         if (h.kind === 'mid') {
           // insere um ponto no meio do segmento e começa a arrastar
           this.store.mutate((d) => {
             const obj = d.objects.find((x) => x.id === h.id);
             const n = obj.points.length;
             const np = { x: h.pos.x, z: h.pos.z };
+            const a0 = obj.points[h.index];
+            if (a0.b) {
+              // arco: divide ao meio, as duas metades continuam no mesmo círculo
+              const half = Math.tan(Math.atan(a0.b) / 2);
+              obj.points[h.index] = { ...a0, b: half };
+              np.b = half;
+            }
             if (obj.type === 'corridor') {
               const j = (h.index + 1) % n;
               const a = obj.points[h.index], b = obj.points[j];
@@ -152,6 +177,10 @@ export class Tools extends EventTarget {
         }
         return;
       }
+      // linha-guia da parede selecionada: clicar puxa uma parede nova dali
+      // (Alt arrasta a parede selecionada em vez de puxar uma nova)
+      const ra = e.altKey ? null : this._railAt(ndc, touch);
+      if (ra) { this._extrudeFrom(ra, e); return; }
       const hit = this.vp.pickObject(ndc);
       if (hit && (e.shiftKey || e.ctrlKey || e.metaKey || (touch && this.multiSelect))) {
         this.store.select(hit.id, { add: true });
@@ -178,8 +207,18 @@ export class Tools extends EventTarget {
     const p = this._cursorPoint(ndc, e);
     if (!p) return;
     this._setControls(false);
+    if (t === 'area' && this.options.area.shape === 'circle') {
+      // sala circular: 1º clique = centro, 2º clique (ou soltar o arraste) = raio
+      if (!this.draft) {
+        this.draft = { type: t, circle: true, points: [{ x: p.x, z: p.z }] };
+        this._dragDraw = true;
+        this._updateDraftPreview();
+        this._emitDraft();
+      } else this.finishDraft();
+      return;
+    }
     if (PATH_TYPES.has(t)) {
-      if (!this.draft) this.draft = { type: t, points: [] };
+      if (!this.draft) { this.draft = { type: t, points: [] }; this._dragDraw = t === 'wall'; }
       const pts = this.draft.points;
       const first = pts[0];
       if (pts.length >= 3 && first && Math.hypot(first.x - p.x, first.z - p.z) < 0.6) {
@@ -188,7 +227,7 @@ export class Tools extends EventTarget {
         return;
       }
       const last = pts[pts.length - 1];
-      if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.05) pts.push({ x: p.x, z: p.z });
+      if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.05) pts.push({ x: p.x, z: p.z, pol: p.pol, onWall: p.onWall });
       this._updateDraftPreview();
       this._emitDraft();
       return;
@@ -206,7 +245,9 @@ export class Tools extends EventTarget {
     if (this.tool === 'select') {
       this._clearLinkHint();
       const h = this._pickHandle(ndc);
-      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : 'default';
+      const ra = h || e.altKey ? null : this._railAt(ndc);
+      if (ra) this._showRailHint(ra);
+      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : ra ? 'copy' : 'default';
       return;
     }
     const p = this._cursorPoint(ndc, e);
@@ -214,6 +255,7 @@ export class Tools extends EventTarget {
     this.dispatchEvent(new CustomEvent('cursor', { detail: p }));
     if (this.tool === 'corridor') this._showLinkHint(p, this._rawCursor, this.levelY, null);
     else this._clearLinkHint();
+    if (this.tool === 'wall' || this.tool === 'area') this._updateGuides(p, this.levelY);
     if (PATH_TYPES.has(this.tool)) this._updateDraftPreview();
     else this._updatePlacePreview();
   }
@@ -228,6 +270,22 @@ export class Tools extends EventTarget {
       if (isTap && !this.vp.playing) this._tap(e);
     }
     this._finishDrag();
+    // arrastou desde o 1º ponto: a parede (ou o raio do círculo) termina onde soltou
+    const dragDraw = this._dragDraw;
+    this._dragDraw = false;
+    if (dragDraw && e.pointerType !== 'touch' && e.button === 0) {
+      const d = this.draft;
+      if (d && this._down?.moved && this.cursor && !cancelled) {
+        if (d.circle) this.finishDraft();
+        else if (d.points.length === 1) {
+          const c = this.cursor, a = d.points[0];
+          if (Math.hypot(c.x - a.x, c.z - a.z) > 0.3) {
+            d.points.push({ x: c.x, z: c.z, pol: c.pol, onWall: c.onWall });
+            this.finishDraft({ keepTool: true });
+          }
+        }
+      }
+    }
     this._setControls(true);
     if (e.button === 0 || e.pointerType === 'touch') this._down = null;
   }
@@ -245,6 +303,7 @@ export class Tools extends EventTarget {
       }
       this.store.emit({ ids: [], structure: true }); // atualiza painéis
       this._clearLinkHint();
+      this._clearGuides();
     }
   }
 
@@ -274,6 +333,8 @@ export class Tools extends EventTarget {
             navigator.vibrate?.(12);
           }, 520);
         }
+      } else if (this._railAt(ndc, true)) {
+        this._pointerDown(e); // toque na linha-guia: puxa a parede e já arrasta a ponta
       } else {
         const hit = this.vp.pickObject(ndc);
         const o = hit && this.store.isSelected(hit.id) ? this.store.get(hit.id) : null;
@@ -405,16 +466,29 @@ export class Tools extends EventTarget {
     const p = this.vp.groundPoint(ndc, this.levelY);
     if (!p) return null;
     this._rawCursor = { x: p.x, z: p.z };
-    return this.snapPoint(p, e?.altKey, null, this.tool === 'corridor');
+    return this.snapPoint(p, e?.altKey, null, this.tool === 'corridor', null, this.draft?.type || this.tool);
   }
 
   /**
    * Ímãs: extremidades de caminhos, eixo de corredores existentes (para
    * ramificar um corredor a partir de outro) e grade.
    */
-  snapPoint(p, noSnap, excludeId, branch = false, y = null) {
+  snapPoint(p, noSnap, excludeId, branch = false, y = null, kind = null) {
     const out = { x: p.x, z: p.z };
     if (noSnap) return out;
+    // paredes e áreas: grade polar das salas circulares e linhas de parede
+    const walls = kind === 'wall' || kind === 'area';
+    let g = null;
+    if (walls) {
+      g = this._guideData(y ?? this.levelY, excludeId);
+      const ps = polarSnap(p, g.sources, this.options.polar);
+      if (ps) {
+        const on = g.lines.find((l) => onLine(ps, l, 0.06));
+        const nw = nearestWall(p, g.lines, 0.3);
+        if (!on && nw && Math.hypot(nw.x - ps.x, nw.z - ps.z) > 0.3) return { x: nw.x, z: nw.z, snapped: true, onWall: nw.line };
+        return { x: ps.x, z: ps.z, snapped: true, pol: ps.pol, onWall: on || null };
+      }
+    }
     // ímã nas extremidades de outros caminhos (para emendar corredores)
     let best = null, bestD = 0.9;
     for (const o of this.store.doc.objects) {
@@ -426,6 +500,10 @@ export class Tools extends EventTarget {
       }
     }
     if (best) return { x: best.x, z: best.z, snapped: true };
+    if (walls) {
+      const nw = nearestWall(p, g.lines, 0.5);
+      if (nw) return { x: nw.x, z: nw.z, snapped: true, onWall: nw.line };
+    }
     if (branch) {
       // eixo/nó de outro corredor: a ponta vira ramificação presa a um nó
       const t = findAttachTarget(this.store.doc, this.vp.ctx, p, y ?? this.levelY, excludeId);
@@ -437,6 +515,209 @@ export class Tools extends EventTarget {
     const s = this.store.doc.settings;
     if (s.snap) { out.x = snap(p.x, s.gridSize / 2); out.z = snap(p.z, s.gridSize / 2); }
     return out;
+  }
+
+  /** Salas circulares e linhas de parede do nível (cache até o documento mudar). */
+  _guideData(y, excludeId) {
+    const key = `${y}|${excludeId || ''}`;
+    if (this._guideCache?.key !== key) {
+      const doc = this.store.doc, ctx = this.vp.ctx;
+      this._guideCache = { key, sources: polarSources(doc, ctx, y, excludeId), lines: wallLines(doc, ctx, y, excludeId) };
+    }
+    return this._guideCache;
+  }
+
+  /**
+   * Desenha a grade polar da sala sob o cursor (anéis, raios, anel ativo) e a
+   * linha-guia da parede de onde dá para extrudar.
+   */
+  _updateGuides(p, y) {
+    this._clearGuides();
+    if (!p) return;
+    const yy = y + 0.06;
+    const V = (x, z) => new THREE.Vector3(x, yy, z);
+    const add = (obj) => { obj.renderOrder = 18; obj.raycast = () => {}; obj.userData.ownGeometry = true; this.guides.add(obj); };
+    if (p.pol) {
+      const src = this._guideCache?.sources.find((s) => s.id === p.pol.sid);
+      if (src) {
+        const { step, divisions } = this.options.polar;
+        const circle = (r) => {
+          const n = Math.max(24, Math.ceil(r * 8));
+          return Array.from({ length: n + 1 }, (_, k) => V(src.cx + Math.cos((k / n) * 2 * Math.PI) * r, src.cz + Math.sin((k / n) * 2 * Math.PI) * r));
+        };
+        const rings = ringsOf(src, step);
+        const seg = [];
+        for (const r of rings) {
+          const c = circle(r);
+          for (let k = 1; k < c.length; k++) seg.push(c[k - 1], c[k]);
+        }
+        const da = (2 * Math.PI) / Math.max(3, divisions);
+        for (let k = 0; k < divisions; k++) {
+          const a = k * da;
+          seg.push(V(src.cx, src.cz), V(src.cx + Math.cos(a) * src.ring0, src.cz + Math.sin(a) * src.ring0));
+        }
+        add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), GUIDE_MAT.grid));
+        if (p.pol.ring >= 0) add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(circle(p.pol.r)), GUIDE_MAT.ring));
+      }
+    }
+    if (p.onWall) {
+      const pts = p.onWall.pts.map((q) => V(q.x, q.z));
+      if (p.onWall.closed && pts.length) pts.push(pts[0].clone());
+      add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), GUIDE_MAT.wall));
+    }
+    if (p.pol || p.onWall) {
+      const dot = new THREE.Mesh(LINK_GEO.core, LINK_MAT.ring);
+      dot.position.set(p.x, yy + 0.01, p.z);
+      dot.rotation.x = -Math.PI / 2;
+      dot.renderOrder = 41;
+      dot.userData.linkHandle = 0.8;
+      dot.raycast = () => {};
+      this.linkHint.add(dot);
+    }
+  }
+
+  _clearGuides() {
+    for (const c of [...this.guides.children]) {
+      this.guides.remove(c);
+      if (c.userData.ownGeometry) c.geometry.dispose();
+    }
+  }
+
+  // ---------------------------------------------------------- linha-guia (extrudar)
+  /** Linha-guia da parede selecionada (parede solta ou parede de área). */
+  _rail() {
+    const o = this.store.get(this.store.selection);
+    if (!o || this.store.multi.size > 1 || this.vp.playing) return null;
+    const H = o.type === 'wall' ? o.height : o.type === 'area' && o.walls?.enabled ? o.walls.height : null;
+    if (H == null) return null;
+    if (this._railCache?.id !== o.id) {
+      const ctx = this.vp.ctx;
+      const y = ctx.levelY(o.levelId);
+      const line = wallLines({ objects: [o] }, ctx, y)[0];
+      const th = o.type === 'wall' ? o.thickness : o.walls.thickness;
+      this._railCache = line ? { id: o.id, o, line, y, top: y + H + 0.02, H, th } : { id: o.id, none: true };
+    }
+    return this._railCache.none ? null : this._railCache;
+  }
+
+  /** Quantos metros valem `px` pixels de tela perto de ndc, no plano y. */
+  _worldPx(ndc, y, px) {
+    const a = this.vp.groundPoint(ndc, y);
+    const r = this.vp.dom.getBoundingClientRect();
+    const b = this.vp.groundPoint(new THREE.Vector2(ndc.x + (2 * px) / (r.width || 1), ndc.y), y);
+    return a && b ? a.distanceTo(b) : 0.5;
+  }
+
+  /**
+   * Ponto da linha-guia sob o cursor: { S, tx, tz, raw, r } ou null. Numa parede
+   * que segue um anel, o ponto encaixa nos raios da grade polar.
+   */
+  _railAt(ndc, touch = false, noSnap = false) {
+    const r = this._rail();
+    if (!r) return null;
+    // o cursor sobre a própria parede (face ou topo); no toque, perto do topo também vale
+    const group = this.vp.objects.get(r.o.id);
+    const meshes = [];
+    group?.traverse((m) => { if (m.isMesh && m.visible && !m.userData.floor && !m.userData.roof) meshes.push(m); });
+    const ray = this.vp.raycaster(ndc);
+    const h = meshes.length ? ray.intersectObjects(meshes, false)[0] : null;
+    let hit = h?.point || null;
+    let c = hit && closestOnPolyline(r.line.pts, hit, r.line.closed);
+    if (!c || c.d > r.th / 2 + 0.2) {
+      hit = this.vp.groundPoint(ndc, r.top);
+      c = hit && closestOnPolyline(r.line.pts, hit, r.line.closed);
+      if (!c || c.d > Math.max(r.th / 2 + 0.05, this._worldPx(ndc, r.top, touch ? 26 : 8))) return null;
+    }
+    // em que face está: +1 / -1 (lados) ou 0 (topo)
+    const nx = -c.tz, nz = c.tx;
+    const off = (hit.x - c.x) * nx + (hit.z - c.z) * nz;
+    const side = hit.y < r.top - 0.06 && Math.abs(off) > r.th * 0.25 ? Math.sign(off) : 0;
+    const hy = Math.max(r.y + 0.05, Math.min(r.top, hit.y));
+    let S = { x: c.x, z: c.z };
+    if (!noSnap) {
+      const ps = polarSnap(S, polarSources(this.store.doc, this.vp.ctx, r.y), this.options.polar);
+      if (ps && onLine(ps, r.line, 0.08)) S = ps;
+    }
+    return { S, tx: c.tx, tz: c.tz, raw: hit, r, side, hy };
+  }
+
+  _showRailHint(ra) {
+    // linha percorrendo a face apontada (na altura do cursor) e uma faixa vertical,
+    // do chão ao topo, marcando de onde a parede nova sai
+    const { r, side, hy } = ra;
+    const pts = r.line.pts;
+    const fr = computeFrames(pts, r.line.closed);
+    const d = side * (r.th / 2 + 0.03);
+    const yLine = side ? hy : r.top;
+    const line = offsetPoints(pts, fr, d).map((q) => new THREE.Vector3(q.x, yLine, q.z));
+    if (r.line.closed && line.length) line.push(line[0].clone());
+    const add = (o) => { o.renderOrder = 40; o.userData.ownGeometry = true; o.raycast = () => {}; this.linkHint.add(o); };
+    add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(line), GUIDE_MAT.face));
+    const tx = ra.tx, tz = ra.tz, nx = -tz, nz = tx;
+    const w = (this.store.doc.objects.find((o) => o.type === 'wall')?.thickness ?? 0.3) / 2;
+    const y0 = r.y + 0.01, y1 = r.top - 0.02;
+    const V = (u, y, o) => new THREE.Vector3(ra.S.x + tx * u + nx * o, y, ra.S.z + tz * u + nz * o);
+    let quad;
+    if (side) {
+      const o = d;
+      quad = [V(-w, y0, o), V(w, y0, o), V(w, y1, o), V(-w, y1, o)];
+    } else {
+      const o = r.th / 2 + 0.01, y = r.top + 0.01;
+      quad = [V(-w, y, -o), V(w, y, -o), V(w, y, o), V(-w, y, o)];
+    }
+    const g = new THREE.BufferGeometry().setFromPoints([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
+    add(new THREE.Mesh(g, GUIDE_MAT.band));
+    add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(quad), GUIDE_MAT.bandEdge));
+    const at = side ? V(0, hy, d) : V(0, r.top, 0);
+    this.linkTip.textContent = 'Clique para puxar uma parede daqui';
+    this.linkTip.classList.remove('join');
+    this._linkAt = at.clone();
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+  }
+
+  /**
+   * Cria uma parede saindo da linha-guia, perpendicular a ela (no anel, vira
+   * radial), para o lado do cursor; sem lado claro, para dentro da sala. Já
+   * começa arrastando a ponta nova.
+   */
+  _extrudeFrom(ra, e) {
+    const { S, raw, r } = ra;
+    let nx = -ra.tz, nz = ra.tx;
+    let side = ra.side || (raw.x - S.x) * nx + (raw.z - S.z) * nz;
+    if (!ra.side && Math.abs(side) < 0.08) {
+      const pol = S.pol;
+      let C = pol ? { x: pol.cx, z: pol.cz } : null;
+      if (!C && r.o.type === 'area') {
+        const pts = r.o.points;
+        C = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, z: pts.reduce((a, p) => a + p.z, 0) / pts.length };
+      }
+      side = C ? (C.x - S.x) * nx + (C.z - S.z) * nz : 1;
+    }
+    if (side < 0) { nx = -nx; nz = -nz; }
+    const L = this.options.polar.step;
+    let E = { x: S.x + nx * L, z: S.z + nz * L };
+    const sE = this.snapPoint(E, e.altKey, null, false, r.y, 'wall');
+    if (Math.hypot(sE.x - S.x, sE.z - S.z) > 0.3) E = sE;
+    const count = this.store.doc.objects.filter((o) => o.type === 'wall').length + 1;
+    const obj = makeObject('wall', {
+      name: `Parede ${count}`, levelId: r.o.levelId, height: this.options.wall.height,
+      points: [
+        { x: S.x, z: S.z, att: attachParam(r.o, S) || undefined },
+        { x: E.x, z: E.z, att: this._attachFor(sE.onWall, sE) || undefined },
+      ].map((q) => (q.att ? q : { x: q.x, z: q.z })),
+    });
+    this.store.addObject(obj);
+    this._clearLinkHint();
+    this._setControls(false);
+    this.drag = { kind: 'point', id: obj.id, index: 1, y: r.y, recorded: true };
+    if (this._down) this._down.moved = true;
+  }
+
+  /** Prendedor para um ponto encaixado numa linha de parede (só se a ponta ficar nela). */
+  _attachFor(line, p, selfId = null) {
+    if (!line || line.id === selfId || !onLine(p, line, 0.08)) return null;
+    return attachParam(this.store.get(line.id), p);
   }
 
   // ---------------------------------------------------------- arraste
@@ -454,8 +735,9 @@ export class Tools extends EventTarget {
         this.store.mutate((doc) => detachEnd(doc.objects.find((x) => x.id === d.id), d.endName), { ids: [d.id], record: true });
       }
       const branch = cur?.type === 'corridor' && isEnd;
-      const p = this.snapPoint(hit, e.altKey, d.id, branch, d.y);
+      const p = this.snapPoint(hit, e.altKey, d.id, branch, d.y, cur?.type);
       if (branch) this._showLinkHint(p, hit, d.y, d.id);
+      else if (cur?.type === 'wall' || cur?.type === 'area') { this._clearLinkHint(); this._updateGuides(p, d.y); }
       // nó do meio de um corredor: não entra em outro objeto (empurra corredores sem agentes)
       const guard = cur?.type === 'corridor' && !isEnd && !e.altKey;
       const ids = [d.id];
@@ -466,7 +748,20 @@ export class Tools extends EventTarget {
         markEdited(doc, o);
         const prev = { ...o.points[d.index] };
         const place = (t) => { o.points[d.index] = { ...prev, x: lerp(prev.x, p.x, t), z: lerp(prev.z, p.z, t) }; };
-        if (!guard) { place(1); return; }
+        if (!guard) {
+          place(1);
+          if (o.type === 'wall') {
+            // ponta solta sobre outra parede fica presa a ela; fora dela, solta
+            const att = this._attachFor(p.onWall, p, o.id);
+            const { att: _old, ...pt } = o.points[d.index];
+            o.points[d.index] = att ? { ...pt, att } : pt;
+          }
+          if (o.type === 'wall' || o.type === 'area') {
+            refitArcs(o, d.index, polarSources(doc, this.vp.ctx, d.y, o.id));
+            arcToRing(o, d.index, p.pol);
+          }
+          return;
+        }
         const ctx = this.vp.ctx;
         const ignore = new Set(nodeCollisions(doc, ctx, o, d.index).keys()); // já encostava antes
         place(1);
@@ -526,6 +821,24 @@ export class Tools extends EventTarget {
         setW(w);
       }, { ids, record });
       this._overlapTip(res, { x: P.x + fr.nx * w * d.side, z: P.z + fr.nz * w * d.side }, d.y);
+    } else if (d.kind === 'radius') {
+      const o = this.store.get(d.id);
+      const c = circleOf(o);
+      if (!c) return;
+      const st = this.store.doc.settings;
+      let r = Math.hypot(hit.x - c.cx, hit.z - c.cz);
+      if (st.snap && !e.altKey) r = snap(r, st.gridSize / 2);
+      r = Math.max(0.5, Math.min(200, r));
+      this.store.mutate((doc) => {
+        const ob = doc.objects.find((x) => x.id === d.id);
+        markEdited(doc, ob);
+        ob.points = circlePoints(c.cx, c.cz, r);
+      }, { ids: [d.id], record });
+      this.linkTip.textContent = `Raio ${r.toFixed(2)} m`;
+      this.linkTip.classList.remove('join');
+      this._linkAt = new THREE.Vector3(c.cx + r, d.y, c.cz);
+      this.linkTip.hidden = false;
+      this._placeLinkTip();
     } else if (d.kind === 'move') {
       const s = this.store.doc.settings;
       let dx = hit.x - d.start.x, dz = hit.z - d.start.z;
@@ -535,7 +848,7 @@ export class Tools extends EventTarget {
         markEdited(doc, o);
         if (PATH_TYPES.has(o.type)) {
           if (s.snap && !e.altKey) { dx = snap(dx, s.gridSize / 2); dz = snap(dz, s.gridSize / 2); }
-          o.points = d.orig.map((p) => ({ ...p, x: p.x + dx, z: p.z + dz }));
+          o.points = d.orig.map(({ att, ...p }) => ({ ...p, x: p.x + dx, z: p.z + dz })); // mover solta as pontas presas
         } else {
           const step = s.snap && !e.altKey ? s.gridSize / 2 : 0;
           o.x = snap(d.orig.x + dx, step);
@@ -602,6 +915,15 @@ export class Tools extends EventTarget {
     const t = this.draft?.type || this.tool;
     const opt = this.options[t] || {};
     const props = { levelId: this.store.doc.activeLevelId, points, smooth: opt.smooth ?? 0 };
+    if (this.draft?.circle) {
+      const c = points[0], r = this._draftRadius();
+      props.points = circlePoints(c.x, c.z, r);
+      props.shape = 'circle';
+      props.smooth = 0;
+    } else if (t === 'wall' || t === 'area') {
+      props.points = withArcs(points, t === 'area' || !!this.draft?.closed);
+      if (t === 'wall') points.forEach((q, i) => { const att = this._attachFor(q.onWall, q); if (att) props.points[i].att = att; });
+    } else props.points = points.map(({ pol, ...q }) => q);
     if (t === 'corridor') {
       Object.assign(props, { width: opt.width, endLevelId: opt.endLevelId || null, rampStyle: opt.rampStyle });
       if (opt.deco && opt.deco !== 'none') props.deco = { type: opt.deco, side: 'both', density: 0.4, color: opt.deco === 'rocks' ? '#b9a88a' : opt.deco === 'sidewalk' ? '#d8cbb3' : '#9bb57a', inset: 0.7, seed: Math.floor(Math.random() * 999) };
@@ -609,18 +931,35 @@ export class Tools extends EventTarget {
     if (t === 'wall') props.height = opt.height;
     if (this.draft?.closed && t !== 'area') props.closed = true;
     const count = this.store.doc.objects.filter((o) => o.type === t).length + 1;
-    props.name = `${TOOL_INFO[t].label} ${count}`;
+    props.name = `${props.shape === 'circle' ? 'Sala circular' : TOOL_INFO[t].label} ${count}`;
     return makeObject(t, props);
+  }
+
+  /** Raio do círculo em desenho: do centro até o cursor (com ímã). */
+  _draftRadius() {
+    const c = this.draft.points[0], q = this.cursor;
+    let r = q ? Math.hypot(q.x - c.x, q.z - c.z) : 0;
+    const st = this.store.doc.settings;
+    if (st.snap) r = snap(r, st.gridSize / 2);
+    return Math.max(0.5, r);
   }
 
   _updateDraftPreview() {
     this._clearPreview();
     if (!this.draft) return;
     const pts = [...this.draft.points];
-    if (this.cursor) pts.push({ x: this.cursor.x, z: this.cursor.z });
+    if (this.cursor) pts.push({ x: this.cursor.x, z: this.cursor.z, pol: this.cursor.pol });
     const y = this.levelY + 0.03;
-    // linha de controle
-    const geo = new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(p.x, y, p.z)));
+    // linha de controle (com os arcos que a grade polar vai criar)
+    let line = pts;
+    if (this.draft.circle) {
+      const c = pts[0];
+      line = [c, ...samplePath(circlePoints(c.x, c.z, this._draftRadius()), { closed: true, spacing: 0.5 })];
+    } else if (this.draft.type === 'wall' || this.draft.type === 'area') {
+      const arcs = withArcs(pts);
+      if (hasArcs(arcs)) line = expandArcs(arcs);
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(line.map((p) => new THREE.Vector3(p.x, y, p.z)));
     this.draftLine = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.4, gapSize: 0.25, depthTest: false }));
     this.draftLine.computeLineDistances();
     this.draftLine.renderOrder = 20;
@@ -628,17 +967,18 @@ export class Tools extends EventTarget {
     for (const p of this.draft.points) this._addHandle(this.vp.helpers, { x: p.x, y, z: p.z }, 'draft');
     if (pts.length >= 2) {
       const obj = this._draftObject(pts);
-      if (obj.type === 'area' && pts.length < 3) return;
+      if (obj.type === 'area' && pts.length < 3 && !this.draft.circle) return;
       this.preview = buildObject(obj, this.vp.ctx);
       applyVisualState(this.preview, 'ghost');
       this.vp.helpers.add(this.preview);
     }
   }
 
-  finishDraft() {
+  finishDraft({ keepTool = false } = {}) {
     const d = this.draft;
     if (!d) return;
-    const min = d.type === 'area' ? 3 : 2;
+    if (d.circle && this.cursor) d.points = [d.points[0], { x: this.cursor.x, z: this.cursor.z }];
+    const min = d.circle ? 2 : d.type === 'area' ? 3 : 2;
     this.draft = null;
     this._clearPreview();
     if (d.points.length >= min) {
@@ -654,7 +994,7 @@ export class Tools extends EventTarget {
           attachEnd(doc, makeContext(doc), b, 'end');
         }, { ids: [obj.id], record: false, structure: true });
       }
-      this.setTool('select');
+      if (keepTool) { this._clearGuides(); this._clearLinkHint(); } else this.setTool('select');
     }
     this._emitDraft();
   }
@@ -839,11 +1179,37 @@ export class Tools extends EventTarget {
     if (this.vp.playing) return;
     const o = this.store.get(this.store.selection);
     if (!o || !PATH_TYPES.has(o.type)) return;
+    const rail = this._rail();
+    if (rail) {
+      const pts = rail.line.pts.map((q) => new THREE.Vector3(q.x, rail.top, q.z));
+      if (rail.line.closed && pts.length) pts.push(pts[0].clone());
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), GUIDE_MAT.rail);
+      l.computeLineDistances();
+      l.renderOrder = 18;
+      l.raycast = () => {};
+      this.handles.add(l);
+    }
     const y0 = this.vp.ctx.levelY(o.levelId);
     const y1 = o.type === 'corridor' && o.endLevelId ? this.vp.ctx.levelY(o.endLevelId) : y0;
     const n = o.points.length;
     const yAt = (i) => lerp(y0, y1, n > 1 ? smoothstep(i / (n - 1)) : 0);
     const closed = o.type === 'area' || o.closed;
+    const circ = circleOf(o);
+    if (circ) {
+      // sala circular: centro move, bolinha muda o raio
+      this._addHandle(this.handles, { x: circ.cx, y: y0 + 0.05, z: circ.cz }, 'center', { id: o.id });
+      this._addHandle(this.handles, { x: circ.cx + circ.r, y: y0 + 0.05, z: circ.cz }, 'radius', { id: o.id });
+      const ring = samplePath(o.points, { closed: true, spacing: 0.5 }).map((p) => new THREE.Vector3(p.x, y0 + 0.06, p.z));
+      ring.push(ring[0].clone());
+      ring.unshift(new THREE.Vector3(circ.cx, y0 + 0.06, circ.cz), new THREE.Vector3(circ.cx + circ.r, y0 + 0.06, circ.cz));
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ring),
+        new THREE.LineDashedMaterial({ color: THEME.select, dashSize: 0.3, gapSize: 0.2, depthTest: false, transparent: true, opacity: 0.9 }));
+      l.computeLineDistances();
+      l.renderOrder = 19;
+      l.raycast = () => {};
+      this.handles.add(l);
+      return;
+    }
     for (let i = 0; i < n; i++) {
       const p = o.points[i];
       const h = this._addHandle(this.handles, { x: p.x, y: yAt(i) + 0.05, z: p.z }, 'point', { id: o.id, index: i });
@@ -874,10 +1240,16 @@ export class Tools extends EventTarget {
     for (let i = 0; i < segs; i++) {
       const a = o.points[i], b = o.points[(i + 1) % n];
       const y = (yAt(i) + yAt((i + 1) % n)) / 2;
-      this._addHandle(this.handles, { x: (a.x + b.x) / 2, y: y + 0.05, z: (a.z + b.z) / 2 }, 'mid', { id: o.id, index: i });
+      const arc = segmentArc(a, b, a.b);
+      const m = arc ? arcPoint(arc, 0.5) : { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+      this._addHandle(this.handles, { x: m.x, y: y + 0.05, z: m.z }, 'mid', { id: o.id, index: i });
     }
-    // polígono de controle
-    const pts = o.points.map((p, i) => new THREE.Vector3(p.x, yAt(i) + 0.06, p.z));
+    // polígono de controle (arcos seguem a curva)
+    let pts;
+    if (hasArcs(o.points)) {
+      const dense = expandArcs(o.points, closed);
+      pts = dense.map((p) => new THREE.Vector3(p.x, yAt(Math.min(n - 1, Math.round(p._c))) + 0.06, p.z));
+    } else pts = o.points.map((p, i) => new THREE.Vector3(p.x, yAt(i) + 0.06, p.z));
     if (closed && pts.length) pts.push(pts[0].clone());
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
       new THREE.LineDashedMaterial({ color: THEME.select, dashSize: 0.3, gapSize: 0.2, depthTest: false, transparent: true, opacity: 0.9 }));
@@ -889,8 +1261,9 @@ export class Tools extends EventTarget {
 
   _addHandle(parent, pos, kind, data = {}) {
     const isMid = kind === 'mid';
-    const geo = isMid ? HANDLE_GEO.mid : kind === 'edge' ? HANDLE_GEO.edge : HANDLE_GEO.point;
-    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : kind === 'edge' ? HANDLE_MAT.edgeHandle : HANDLE_MAT.point;
+    const round = kind === 'edge' || kind === 'radius';
+    const geo = isMid ? HANDLE_GEO.mid : round ? HANDLE_GEO.edge : HANDLE_GEO.point;
+    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : round ? HANDLE_MAT.edgeHandle : kind === 'center' ? HANDLE_MAT.draft : HANDLE_MAT.point;
     const m = new THREE.Mesh(geo, mat);
     m.position.set(pos.x, pos.y, pos.z);
     m.renderOrder = 30;
@@ -910,7 +1283,7 @@ export class Tools extends EventTarget {
     const rc = this.vp.raycaster(ndc);
     const hits = rc.intersectObjects(list, false);
     // pontos têm prioridade sobre meios
-    const rank = { point: 0, edge: 1, mid: 2 };
+    const rank = { point: 0, radius: 0, center: 1, edge: 1, mid: 2 };
     let obj = null;
     if (hits.length) {
       hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
@@ -961,6 +1334,16 @@ const HANDLE_MAT = {
   draft: new THREE.MeshBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true }),
   edgeHandle: new THREE.MeshBasicMaterial({ color: THEME.select, depthTest: false, transparent: true }),
   edge: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true }),
+};
+
+const GUIDE_MAT = {
+  grid: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true, opacity: 0.22 }),
+  ring: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, opacity: 0.85 }),
+  wall: new THREE.LineBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, opacity: 0.95 }),
+  face: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: true, transparent: true, opacity: 0.95, linewidth: 2 }),
+  band: new THREE.MeshBasicMaterial({ color: THEME.accent, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
+  bandEdge: new THREE.LineBasicMaterial({ color: THEME.accent, transparent: true, opacity: 1 }),
+  rail: new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.5, gapSize: 0.25, depthTest: false, transparent: true, opacity: 0.95 }),
 };
 
 const LINK_GEO = {

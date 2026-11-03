@@ -2,6 +2,7 @@
 import { normalizeDoc, sampleDoc } from './model.js';
 import { debounce, deepClone } from './util.js';
 import { syncLinks, markEdited } from './builders/corridorPath.js';
+import { syncAttachments } from './editor/polar.js';
 
 const STORAGE_KEY = 'levedit.doc.v1';
 const MAX_HISTORY = 120;
@@ -54,6 +55,7 @@ export class Store extends EventTarget {
     if (record) this.snapshot();
     fn(this.doc);
     syncLinks(this.doc);
+    syncAttachments(this.doc); // paredes presas acompanham a origem
     this.emit({ ids, all, structure });
     this._autosave();
   }
