@@ -72,6 +72,9 @@ export class Viewport {
     this.controlsOrtho.enableRotate = false;
     this.controlsOrtho.screenSpacePanning = true;
     this.controlsOrtho.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+    // toque: um dedo gira (Planta: move), dois dedos movem e dão zoom
+    this.controlsPersp.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    this.controlsOrtho.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
     this.controlsOrtho.target.set(0, 0, 0);
     this.controlsOrtho.enabled = false;
     this.controls = this.controlsPersp;

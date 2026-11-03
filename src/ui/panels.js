@@ -445,6 +445,7 @@ export class Panels {
     };
     const has = (t) => doc.objects.some((o) => o.type === t);
     const hasPlayer = doc.objects.some((o) => o.type === 'agent' && o.role === 'player');
+    const touch = document.body.classList.contains('touch');
     const step = (n, done, title, text, tool, key) => el('li', { class: `step ${done ? 'done' : ''}` },
       el('span', { class: 'num' }, done ? '✓' : String(n)),
       el('div', {}, el('div', { class: 'step-title' }, title), el('div', { class: 'step-text' }, text)),
@@ -456,11 +457,11 @@ export class Panels {
       el('div', { class: 'eyebrow' }, 'Comece por aqui'),
       el('h3', {}, 'Monte seu level em 3 passos'),
       el('ol', { class: 'steps' },
-        step(1, has('corridor') || has('area'), 'Desenhe o caminho', 'Corredor (C) ou Área (A): clique para pôr pontos, Enter termina. As paredes surgem sozinhas.', 'corridor', 'C'),
+        step(1, has('corridor') || has('area'), 'Desenhe o caminho', touch ? 'Corredor ou Área: toque para pôr pontos e aperte Concluir. As paredes surgem sozinhas.' : 'Corredor (C) ou Área (A): clique para pôr pontos, Enter termina. As paredes surgem sozinhas.', 'corridor', 'C'),
         step(2, hasPlayer, 'Coloque agentes', 'Um player e alguns inimigos com a ferramenta Agente (P).', 'agent', 'P'),
         step(3, false, 'Teste', 'Aperte Testar para jogar o level.', null),
       ),
-      el('p', { class: 'tip-line' }, 'Clique em um objeto para editá-lo · ', el('kbd', {}, '?'), ' mostra todos os atalhos'),
+      touch ? el('p', { class: 'tip-line' }, 'Toque em um objeto para editá-lo · 1 dedo gira a câmera, 2 dedos movem e dão zoom') : el('p', { class: 'tip-line' }, 'Clique em um objeto para editá-lo · ', el('kbd', {}, '?'), ' mostra todos os atalhos'),
     ));
     const counts = {};
     for (const o of doc.objects) counts[o.type] = (counts[o.type] || 0) + 1;

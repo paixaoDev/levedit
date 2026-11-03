@@ -2,7 +2,8 @@
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#fffefb" />
   <title>Levedit · editor de levels</title>
   <meta name="description" content="Editor de levels 3D para mockups de jogos: corredores por curva com paredes procedurais, níveis, assets coloríveis e agentes jogáveis." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232f2a24'/%3E%3Cpath d='M4 16c4 0 4-8 8-8s4 8 8 8' fill='none' stroke='%23f6f1e7' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
@@ -56,7 +57,7 @@
   </header>
 
   <main class="layout">
-    <aside class="panel left" aria-label="Andares e objetos">
+    <aside class="panel left" id="panel-scene" aria-label="Andares e objetos">
       <section class="section">
         <div class="section-head">
           <h2>Andares</h2>
@@ -85,12 +86,19 @@
       <div class="view-hint" id="view-hint"></div>
       <div class="hint-pill" id="status-hint"></div>
       <div class="coords"><span id="status-level"></span><span id="status-cursor" class="mono"></span></div>
+      <div class="touch-bar" id="touch-bar" role="toolbar" aria-label="Ações rápidas" hidden></div>
     </div>
 
-    <aside class="panel right" aria-label="Propriedades">
+    <aside class="panel right" id="panel-props" aria-label="Propriedades">
       <section class="section tool-card" id="tool-options"></section>
       <section class="section grow" id="props"></section>
     </aside>
+
+    <!-- celular: os dois painéis viram uma gaveta embaixo, com abas -->
+    <nav class="sheet-tabs" id="sheet-tabs" aria-label="Painéis">
+      <button type="button" data-sheet="scene" aria-controls="panel-scene"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5" opacity=".6"/></svg><span>Andares e objetos</span></button>
+      <button type="button" data-sheet="props" aria-controls="panel-props"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span id="sheet-props-label">Propriedades</span><i class="dot" aria-hidden="true"></i></button>
+    </nav>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -114,6 +122,8 @@
       <div><kbd>Shift</kbd> + clique Somar à seleção</div><div><kbd>Ctrl</kbd> <kbd>G</kbd> Agrupar e conectar</div>
       <div><kbd>PgUp</kbd> <kbd>PgDn</kbd> Trocar andar</div><div><kbd>Ctrl</kbd> <kbd>↵</kbd> Testar</div>
     </div>
+    <h4>No celular</h4>
+    <p>Um dedo gira a câmera (na Planta, move) · dois dedos movem e dão zoom com pinça · toque seleciona, põe pontos e coloca objetos. Arraste os quadrados para mover nós; <b>segure</b> um quadrado para removê-lo ou uma bolinha para resetar a largura. Para mover um corredor, parede ou área selecionado, segure o dedo nele e arraste. A barra embaixo da cena tem Concluir, Desfazer ponto, Duplicar, Excluir e "Vários" (somar à seleção).</p>
     <h4>Câmera</h4>
     <p>Arraste no vazio (ou com o botão direito) para girar · botão do meio ou Shift+arrastar para mover · roda para zoom. Na Planta, qualquer botão move.</p>
     <h4>Curvas</h4>
