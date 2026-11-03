@@ -62,6 +62,7 @@ export const TYPE_DEFAULTS = {
     name: 'Área',
     points: [],
     closed: true,
+    shape: 'free', // 'circle': 4 nós em arco, editada por centro e raio
     smooth: 0,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
     walls: { enabled: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous' },

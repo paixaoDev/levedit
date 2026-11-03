@@ -26,7 +26,82 @@ const dist = (a, b) => Math.hypot(b.x - a.x, b.z - a.z);
  * @returns {{x:number,z:number,s:number,u:number,ctrl:number}[]} amostras com
  *  comprimento acumulado (s), fração (u) e índice do ponto de controle de origem.
  */
-export function samplePath(points, { closed = false, smooth = 0, spacing = 1 } = {}) {
+export function samplePath(points, opts = {}) {
+  if (!hasArcs(points)) return samplePlain(points, opts);
+  // Segmentos em arco (bulge `b` no ponto inicial): expande em pontos densos
+  // sobre o arco e amostra como polilinha; ctrl volta a apontar para os nós originais.
+  const closed = !!opts.closed;
+  const dense = expandArcs(points, closed);
+  const out = samplePlain(dense, { ...opts, smooth: 0 });
+  for (const p of out) {
+    const i = Math.floor(p.ctrl), f = p.ctrl - i;
+    const a = dense[Math.min(i, dense.length - 1)]._c;
+    const b = i + 1 < dense.length ? dense[i + 1]._c : closed ? points.length : a;
+    p.ctrl = f > 0 ? a + (b - a) * f : a;
+  }
+  return out;
+}
+
+/** Algum segmento tem arco? */
+export function hasArcs(points) {
+  return points.some((p) => p.b);
+}
+
+/**
+ * Arco do segmento A→B com bulge b = tan(varredura/4) (b>0: anti-horário no
+ * plano x/z, isto é, ângulo de atan2(z, x) crescente). Retorna
+ * { cx, cz, r, a0, sweep } ou null se for reto.
+ */
+export function segmentArc(A, B, b) {
+  const dx = B.x - A.x, dz = B.z - A.z;
+  const c = Math.hypot(dx, dz);
+  if (!b || c < EPS) return null;
+  const sweep = 4 * Math.atan(b);
+  const h = c / 2 / Math.tan(sweep / 2);
+  const cx = (A.x + B.x) / 2 - (dz / c) * h, cz = (A.z + B.z) / 2 + (dx / c) * h;
+  return { cx, cz, r: Math.hypot(A.x - cx, A.z - cz), a0: Math.atan2(A.z - cz, A.x - cx), sweep };
+}
+
+/** Ponto do arco na fração t (0..1). */
+export function arcPoint(arc, t) {
+  const a = arc.a0 + arc.sweep * t;
+  return { x: arc.cx + Math.cos(a) * arc.r, z: arc.cz + Math.sin(a) * arc.r };
+}
+
+/**
+ * Bulge do arco de centro C que vai de A até B. dir: +1 anti-horário, -1
+ * horário, 0 = o arco mais curto.
+ */
+export function bulgeFor(C, A, B, dir = 0) {
+  const a0 = Math.atan2(A.z - C.z, A.x - C.x), a1 = Math.atan2(B.z - C.z, B.x - C.x);
+  let sw = a1 - a0;
+  while (sw <= -Math.PI) sw += 2 * Math.PI;
+  while (sw > Math.PI) sw -= 2 * Math.PI;
+  if (dir > 0 && sw < 0) sw += 2 * Math.PI;
+  if (dir < 0 && sw > 0) sw -= 2 * Math.PI;
+  if (Math.abs(sw) < 1e-4) return 0;
+  return Math.tan(sw / 4);
+}
+
+/** Pontos densos sobre os arcos; cada um guarda _c = índice (fracionário) do nó original. */
+export function expandArcs(points, closed = false) {
+  const n = points.length;
+  const out = [];
+  const segs = closed ? n : n - 1;
+  for (let i = 0; i < n; i++) {
+    const A = points[i];
+    out.push({ x: A.x, z: A.z, _c: i });
+    if (i >= segs) continue;
+    const arc = segmentArc(A, points[(i + 1) % n], A.b);
+    if (!arc) continue;
+    const len = Math.abs(arc.sweep) * arc.r;
+    const k = Math.max(4, Math.ceil(Math.max(len / 0.3, Math.abs(arc.sweep) / (Math.PI / 36))));
+    for (let j = 1; j < k; j++) out.push({ ...arcPoint(arc, j / k), _c: i + j / k });
+  }
+  return out;
+}
+
+function samplePlain(points, { closed = false, smooth = 0, spacing = 1 } = {}) {
   const n = points.length;
   if (n === 0) return [];
   if (n === 1) return [{ x: points[0].x, z: points[0].z, s: 0, u: 0, ctrl: 0 }];
