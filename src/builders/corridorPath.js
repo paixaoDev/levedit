@@ -222,6 +222,8 @@ function sharedDoors(info, A, B) {
   if (Math.abs(A.ol.y - B.ol.y) > 1) return;
   const style = a.joins?.areas || 'door';
   if (style === 'none' || (b.joins?.areas || 'door') === 'none') return;
+  if (overlapping(A, B)) return; // sobrepostas se fundem (mergeCuts), sem porta
+  if (!a.walls?.enabled || !b.walls?.enabled) return; // sem parede (plataforma): nada a abrir
   const tol = (a.walls.enabled ? a.walls.thickness : 0) + (b.walls.enabled ? b.walls.thickness : 0) + 0.3;
   const sa = A.ol.samples, n = sa.length;
   // amostra fina do contorno de A marcando o que corre junto ao contorno de B
@@ -262,6 +264,74 @@ function sharedDoors(info, A, B) {
     const sB = mid.c.s;
     info.get(b.id).cuts.push({ ...base, style: style === 'door' ? 'open' : style, s0: sB - w, s1: sB + w, s: sB, half: w, from: a.id, wallH: b.walls.height });
   }
+}
+
+/**
+ * Áreas sobrepostas (mesmo nível) viram um espaço só: corta a parede de A nos
+ * trechos em que a linha dela fica dentro de outra área, além da parede desta
+ * (assim as duas paredes ainda se encontram no cruzamento, sem fresta).
+ */
+function mergeCuts(info, A, areas) {
+  const a = A.o;
+  if (!a.walls?.enabled || A.ol.samples.length < 3) return;
+  const others = areas.filter((B) => B !== A && B.ol.samples.length >= 3 && Math.abs(B.ol.y - A.ol.y) < 1 && boxesTouch(A.ol.samples, B.ol.samples));
+  if (!others.length) return;
+  const thA = a.walls.thickness;
+  const center = A.ol.at(thA / 2);
+  const n = center.length, total = A.ol.total;
+  const step = 0.2;
+  const marks = [];
+  for (let k = 0; k < n; k++) {
+    const p = center[k], q = center[(k + 1) % n];
+    const s0 = A.ol.samples[k].s, s1 = k + 1 < n ? A.ol.samples[k + 1].s : total;
+    const len = Math.hypot(q.x - p.x, q.z - p.z);
+    const m = Math.max(1, Math.ceil(len / step));
+    for (let j = 0; j < m; j++) {
+      const f = j / m;
+      const P = { x: p.x + (q.x - p.x) * f, z: p.z + (q.z - p.z) * f };
+      const inside = others.some((B) => {
+        if (!insidePoly(B.ol.samples, P)) return false;
+        const thB = B.o.walls?.enabled ? B.o.walls.thickness : 0;
+        return (closestOnPolyline(B.ol.samples, P, true)?.d ?? 0) > thB;
+      });
+      marks.push({ s: s0 + (s1 - s0) * f, inside });
+    }
+  }
+  if (!marks.some((m) => m.inside)) return;
+  const cuts = info.get(a.id).cuts;
+  const base = { style: 'merge', y: A.ol.y, height: a.walls.height, wallH: a.walls.height, side: 0, from: null };
+  if (marks.every((m) => m.inside)) { cuts.push({ ...base, s0: 0, s1: total, s: total / 2, half: total / 2 }); return; }
+  // trechos contínuos, começando num ponto de fora (assim um trecho pode passar do fim ao começo)
+  const start = marks.findIndex((m) => !m.inside);
+  let run = null;
+  const flush = (endS) => {
+    if (!run) return;
+    let s1 = endS;
+    if (s1 < run) s1 += total;
+    cuts.push({ ...base, s0: run, s1, s: (run + s1) / 2, half: (s1 - run) / 2 });
+    run = null;
+  };
+  for (let i = 1; i <= marks.length; i++) {
+    const m = marks[(start + i) % marks.length];
+    if (m.inside && run == null) run = m.s;
+    else if (!m.inside && run != null) flush(m.s);
+  }
+}
+
+/** Uma área entra na outra (além da parede)? */
+function overlapping(A, B) {
+  if (!boxesTouch(A.ol.samples, B.ol.samples)) return false;
+  const deep = (X, Y) => {
+    const th = Y.o.walls?.enabled ? Y.o.walls.thickness : 0;
+    return X.ol.samples.some((p) => insidePoly(Y.ol.samples, p) && (closestOnPolyline(Y.ol.samples, p, true)?.d ?? 0) > th + 0.1);
+  };
+  return deep(A, B) || deep(B, A);
+}
+
+function boxesTouch(P, Q) {
+  const bb = (pts) => pts.reduce((b, p) => [Math.min(b[0], p.x), Math.min(b[1], p.z), Math.max(b[2], p.x), Math.max(b[3], p.z)], [Infinity, Infinity, -Infinity, -Infinity]);
+  const a = bb(P), b = bb(Q);
+  return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
 }
 
 /**
@@ -394,6 +464,9 @@ export function computeJunctions(ctx) {
   for (let i = 0; i < areas.length; i++) {
     for (let k = i + 1; k < areas.length; k++) sharedDoors(info, areas[i], areas[k]);
   }
+
+  // ---- áreas sobrepostas se fundem: a parede que entra em outra área some ali
+  for (const A of areas) mergeCuts(info, A, areas);
 
   // ---- quem invade encosta: cada corredor não entra nos corredores mais antigos
   // (e no pai, longe da porta) nem em áreas que não são o destino dele. A meia-largura

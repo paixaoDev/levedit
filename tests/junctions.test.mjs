@@ -245,3 +245,20 @@ test('quem foi editado por último é quem encosta, não o mais novo', () => {
   const h = j.get('a').clamp({ x: 0, z: 0, s: 10 }, fl, -1);
   assert.ok(Math.abs(h - (8 - 2.3 - 0.3 - 0.02)) < 1e-6, `meia-largura ${h}`);
 });
+
+test('salas sobrepostas se fundem: a parede some só dentro da outra sala', async () => {
+  const { circlePoints } = await import('../src/editor/polar.js');
+  const area = (id, cx, r) => ({ id, type: 'area', levelId: 'l0', closed: true, smooth: 0, shape: 'circle', points: circlePoints(cx, 0, r), proc: { segment: 1 }, walls: { enabled: true, height: 3, thickness: 0.3 }, joins: { areas: 'door' }, doorWidth: 1.6 });
+  const A = area('A', 0, 10), B = area('B', 14, 8), C = area('C', 40, 5);
+  const j = computeJunctions(ctxFor([A, B, C]));
+  const ca = j.get('A').cuts.filter((c) => c.style === 'merge');
+  const cb = j.get('B').cuts.filter((c) => c.style === 'merge');
+  assert.equal(ca.length, 1, 'A abre um trecho');
+  assert.equal(cb.length, 1, 'B abre um trecho');
+  assert.equal(j.get('C').cuts.length, 0, 'C não encosta em ninguém');
+  // o trecho de A fica do lado de B (perto de x=10, ângulo 0 → s≈0, passando do fim ao começo)
+  const total = 2 * Math.PI * 10;
+  const mid = ((ca[0].s % total) + total) % total;
+  assert.ok(mid < 4 || mid > total - 4, `meio do corte em s=${mid}`);
+  assert.ok(ca[0].s1 - ca[0].s0 > 2 && ca[0].s1 - ca[0].s0 < 15);
+});

@@ -219,7 +219,10 @@ function buildArea(o, ctx) {
   const s = ol.samples;
   if (s.length < 3) return group;
   if (o.floor.enabled) {
-    const fl = makeMesh(slabGeometry(s, y, o.floor.thickness), o.floor.color, { threshold: 30 });
+    // áreas sobrepostas: cada piso um pouquinho acima do anterior (sem piscar)
+    const order = ctx.doc.objects.filter((x) => x.type === 'area').findIndex((x) => x.id === o.id);
+    const lift = ((Math.max(0, order) % 8) + 1) * 0.004;
+    const fl = makeMesh(slabGeometry(s, y + lift, o.floor.thickness), o.floor.color, { threshold: 30 });
     fl.userData.floor = true;
     group.add(fl);
   }
