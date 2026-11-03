@@ -1,5 +1,5 @@
 // Store do documento: mutações, undo/redo por snapshot e autosave local.
-import { normalizeDoc, sampleDoc, applyWallDefaults } from './model.js';
+import { normalizeDoc, sampleDoc } from './model.js';
 import { debounce, deepClone } from './util.js';
 import { syncLinks, markEdited } from './builders/corridorPath.js';
 
@@ -127,7 +127,7 @@ export class Store extends EventTarget {
   }
 
   addObject(obj) {
-    this.mutate((d) => { applyWallDefaults(obj, d.settings); d.objects.push(obj); if (obj.points) markEdited(d, obj); }, { ids: [obj.id], structure: true });
+    this.mutate((d) => { d.objects.push(obj); if (obj.points) markEdited(d, obj); }, { ids: [obj.id], structure: true });
     this.select(obj.id);
   }
 

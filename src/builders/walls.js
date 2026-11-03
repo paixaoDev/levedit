@@ -6,10 +6,6 @@ import { computeFrames, offsetPoints } from '../math/curve.js';
 import { wallGeometry, boxBetween } from '../render/geometry.js';
 import { makeMesh } from '../render/materials.js';
 import { rng, noise1D } from '../util.js';
-import { Batch, rock, tree, bush, slab, NATURAL, TRUNK_COLOR } from './nature.js';
-
-// Colisor das paredes estilizadas: invisível, mas o jogo e o clique enxergam.
-const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
 
 /**
  * @param {{x,z,y,s}[]} center linha central da parede (com y da base e s)
@@ -19,7 +15,6 @@ const HIDDEN = new THREE.MeshBasicMaterial({ visible: false });
 export function buildWallLine(center, o) {
   const group = new THREE.Group();
   if (center.length < 2) return group;
-  if (o.style && o.style !== 'smooth') return buildStyledWall(center, o);
   const proc = o.proc || {};
   const seed = (proc.seed || 1) * 131 + (o.seedOffset || 0);
   const rnd = rng(seed);
@@ -138,107 +133,4 @@ function splitAt(line, marks, closed) {
   }
   if (!closed) out.push(line[n - 1]);
   return out;
-}
-
-/**
- * Parede estilizada (pedras, árvores, arbustos, rochedo): um colisor liso e
- * invisível com a mesma espessura/altura/aberturas, coberto por peças
- * procedurais que preenchem a espessura da parede.
- */
-function buildStyledWall(center, o) {
-  const group = new THREE.Group();
-  const solid = buildWallLine(center, { ...o, style: 'smooth', mode: 'continuous', proc: { ...o.proc, gapChance: 0, jitter: 0, heightVar: 0 } });
-  solid.traverse((m) => {
-    if (!m.isMesh) return;
-    m.material = HIDDEN;
-    delete m.userData.baseColor;
-    m.castShadow = m.receiveShadow = false;
-    for (const c of [...m.children]) m.remove(c);
-  });
-  group.add(solid);
-
-  const T = Math.max(0.05, o.thickness), H = Math.max(0.2, o.height);
-  const closed = !!o.closed;
-  const rnd = rng(((o.proc?.seed || 1) * 977 + (o.seedOffset || 0) * 31) >>> 0);
-  const color = (o.color || '#ffffff').toLowerCase() === '#ffffff' ? (NATURAL[o.style] || o.color) : o.color;
-  const cuts = (o.cuts || []).map((c) => [c.s0, c.s1]);
-  const b = new Batch();
-  const step = {
-    rocks: Math.max(0.3, Math.min(T, H) * 0.7),
-    cliff: Math.max(0.35, T * 0.45),
-    trees: Math.max(0.9, Math.min(2.4, T * 0.7)),
-    bushes: Math.max(0.5, Math.min(1.6, T * 0.6)),
-  }[o.style] || 1;
-  // fileiras ao longo da espessura (paredes grossas ficam com várias)
-  const rows = o.style === 'cliff' ? 1 : Math.max(1, Math.min(5, Math.round(T / (o.style === 'trees' ? 1.8 : o.style === 'rocks' ? Math.max(0.5, Math.min(T, H)) : 1.2))));
-  walkLine(center, closed, step, (p, k) => {
-    if (cuts.some(([a, c]) => p.s > a - step * 0.35 && p.s < c + step * 0.35)) return;
-    const yaw = Math.atan2(p.tx, p.tz);
-    for (let r = 0; r < rows; r++) {
-      const lat = rows === 1 ? 0 : (r / (rows - 1) - 0.5) * T * 0.7;
-      const stagger = rows > 1 && r % 2 ? step * 0.5 : 0;
-      const jl = (rnd() - 0.5) * Math.min(T, step) * 0.25;
-      const x = p.x + p.nx * (lat + jl) + p.tx * stagger * (k > 0 ? 1 : 0);
-      const z = p.z + p.nz * (lat + jl) + p.tz * stagger * (k > 0 ? 1 : 0);
-      const y = p.y;
-      const cell = Math.max(T / rows, step);
-      switch (o.style) {
-        case 'rocks': {
-          // pilha de pedras até a altura da parede
-          const size = Math.min(cell, H) * 0.62;
-          const layers = Math.max(1, Math.round(H / (size * 1.5)));
-          const lh = H / layers;
-          for (let l = 0; l < layers; l++) {
-            const top = l === layers - 1;
-            rock(b, rnd, color, x + (rnd() - 0.5) * size * 0.3, y + l * lh - lh * 0.1, z, size * (0.95 + rnd() * 0.3), lh * (top ? 1.15 + rnd() * 0.25 : 1.3), yaw);
-          }
-          break;
-        }
-        case 'cliff': {
-          const h = H * (0.85 + rnd() * 0.35);
-          slab(b, rnd, color, x, y, z, step * 1.35, T * (0.85 + rnd() * 0.3), h, yaw);
-          if (rnd() < 0.35) slab(b, rnd, color, x + p.nx * T * 0.2, y, z + p.nz * T * 0.2, step * 0.9, T * 0.6, h * (1.1 + rnd() * 0.2), yaw);
-          break;
-        }
-        case 'trees': {
-          const h = Math.max(H, 2) * (0.95 + rnd() * 0.45);
-          const rad = Math.max(step * 0.75, Math.min(cell * 0.75, h * 0.35));
-          tree(b, rnd, { leaf: color, trunk: TRUNK_COLOR }, x, y, z, h, rad);
-          break;
-        }
-        case 'bushes': {
-          const rad = Math.max(step * 0.7, cell * 0.6);
-          const layers = Math.max(1, Math.round(H / (rad * 1.6)));
-          const lh = H / layers;
-          for (let l = 0; l < layers; l++) bush(b, rnd, color, x, y + l * lh * 0.85, z, rad * (1 - l * 0.12), lh * 1.25);
-          break;
-        }
-        default: break;
-      }
-    }
-  });
-  for (const m of b.build({ threshold: o.style === 'cliff' ? 25 : 32 })) group.add(m);
-  return group;
-}
-
-/** Percorre a linha em passos de comprimento real; s/y são interpolados. */
-function walkLine(line, closed, step, fn) {
-  const n = line.length;
-  const segs = closed ? n : n - 1;
-  let carry = step * 0.5, k = 0;
-  for (let i = 0; i < segs; i++) {
-    const a = line[i], b = line[(i + 1) % n];
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const L = Math.hypot(dx, dz);
-    if (L < 1e-6) continue;
-    const tx = dx / L, tz = dz / L;
-    const sa = a.s ?? i, sb = closed && i === n - 1 ? sa + L : (b.s ?? i + 1);
-    let t = carry;
-    while (t <= L) {
-      const f = t / L;
-      fn({ x: a.x + dx * f, z: a.z + dz * f, y: (a.y ?? 0) + ((b.y ?? 0) - (a.y ?? 0)) * f, s: sa + (sb - sa) * f, tx, tz, nx: -tz, nz: tx }, k++);
-      t += step;
-    }
-    carry = t - L;
-  }
 }

@@ -65,14 +65,6 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - No editor o teto aparece só como contorno tracejado, como linha oculta em desenho técnico (ou sólido/oculto); no modo jogo em FPS ele é sólido.
 - Outros níveis em modo "transparentes" aparecem em pontinhos, sem somar camadas quando se sobrepõem.
 
-**Cenário (botão Cenário, no canto da vista)**
-- **Espessura das paredes** do level inteiro num controle só, e **estilo** procedural: lisa, pedras, árvores,
-  arbustos ou rochedo. Pedras e árvores preenchem a espessura da parede (paredes de 1 a 3 m ficam ótimas).
-- Qualquer corredor, área ou parede pode ligar **Personalizar** no inspetor para ter espessura e estilo próprios.
-- **Fundo**: floresta, pedras, morros em volta (estilo jogo de plataforma), montanhas ou cidade com prédios,
-  com cores, densidade, altura, alcance e afastamento ajustáveis. É só para ver: não tem colisão e, com
-  "bloquear saída", o player não sai do chão do level no modo jogo.
-
 **Agentes e modo de teste (▶ Testar)**
 - Player com 3 gameplays customizáveis: **FPS** (mouse travado, tiro hitscan), **Plataforma** (terceira pessoa,
   pulo duplo, pisão nos inimigos) e **Carro** (arcade com drift e freio de mão).
