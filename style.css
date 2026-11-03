@@ -469,6 +469,56 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { border-color: var(--ac
 }
 .hud-toast.show { opacity: 1; }
 
+/* controles de toque do modo jogo (src/play/touchControls.js) */
+.tc { position: absolute; inset: 0; pointer-events: auto; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.tc-stick {
+  position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  background: rgba(255, 254, 251, 0.28); border: 2px solid rgba(255, 254, 251, 0.75); box-shadow: 0 2px 12px rgba(42, 37, 31, 0.18);
+  display: grid; place-items: center; pointer-events: none;
+}
+.tc-stick[hidden] { display: none; }
+.tc-car .tc-stick { height: 64px; margin-top: -32px; border-radius: 32px; width: 150px; margin-left: -75px; }
+.tc-knob { width: 56px; height: 56px; border-radius: 50%; background: rgba(255, 254, 251, 0.95); border: 1px solid var(--line-mid); box-shadow: var(--shadow); }
+.tc-stick-hint {
+  position: absolute; left: calc(18px + env(safe-area-inset-left, 0px)); bottom: calc(28px + env(safe-area-inset-bottom, 0px)); width: 110px; height: 110px; border-radius: 50%;
+  border: 2px dashed rgba(255, 254, 251, 0.8); display: grid; place-items: center; pointer-events: none;
+  color: #fff; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  background: rgba(42, 37, 31, 0.12);
+}
+.tc-car .tc-stick-hint { height: 60px; width: 140px; border-radius: 30px; bottom: calc(52px + env(safe-area-inset-bottom, 0px)); }
+.tc.stick-on .tc-stick-hint { opacity: 0; }
+.tc-buttons {
+  position: absolute; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: row-reverse; align-items: flex-end; gap: 12px;
+}
+.tc-btn {
+  width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; align-content: center; gap: 1px; padding: 0;
+  background: rgba(255, 254, 251, 0.9); border: 1px solid var(--line-mid); color: var(--ink); box-shadow: var(--shadow);
+  font-size: 10.5px; font-weight: 700; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+.tc-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tc-btn.big { width: 84px; height: 84px; background: var(--accent); border-color: var(--accent-ink); color: #fff; font-size: 12px; }
+.tc-btn.big svg { width: 28px; height: 28px; }
+.tc-btn.on { transform: scale(0.92); filter: brightness(0.92); }
+.tc-car .tc-buttons { flex-direction: column-reverse; align-items: flex-end; }
+.tc-car .tc-btn[data-btn="brake"], .tc-car .tc-btn[data-btn="drift"] { position: absolute; bottom: 0; }
+.tc-car .tc-btn[data-btn="brake"] { right: 96px; }
+.tc-car .tc-btn[data-btn="drift"] { right: 96px; bottom: 76px; }
+.hud.touch .hud-top { position: relative; z-index: 2; flex-wrap: wrap; padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 8px; gap: 6px; }
+.hud.touch .hud-card { padding: 6px 10px; }
+.hud.touch .hud-bar { width: 120px; }
+.hud.touch .hud-stats { font-size: 11px; }
+.hud.touch .hud-stop { min-height: 40px; position: relative; z-index: 2; }
+.hud.touch .hud-help { top: auto; bottom: auto; top: 50%; transform: translate(-50%, -50%); opacity: 0; animation: tc-help 5s ease forwards; white-space: normal; text-align: center; max-width: calc(100% - 40px); border-radius: 14px; }
+body.playing.touch .hint-pill, body.playing .touch-bar { display: none !important; }
+/* celular jogando: sem barra do topo, o HUD já tem o Parar */
+@media (max-width: 900px), (max-height: 500px) {
+  body.playing { grid-template-rows: 1fr; }
+  body.playing .topbar { display: none; }
+}
+@keyframes tc-help { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .hud.touch .hud-help { animation: none; display: none; } }
+
 /* jogando: a cena ocupa a tela toda */
 body.playing .layout { grid-template-columns: 0 1fr 0; }
 body.playing .panel { visibility: hidden; border: 0; }
