@@ -49,9 +49,9 @@ export function field(obj, f, onChange) {
       break;
     }
     case 'bool': {
-      const cb = el('input', { type: 'checkbox', id, checked: !!value });
+      const cb = el('input', { type: 'checkbox', id, role: 'switch', checked: !!value });
       cb.addEventListener('change', () => onChange(f.key, cb.checked, true));
-      control = el('label', { class: 'toggle' }, cb, f.text || '');
+      control = el('label', { class: 'switch' }, cb, el('span', { class: 'track', 'aria-hidden': 'true' }), f.text ? el('span', { class: 'switch-text' }, f.text) : null);
       break;
     }
     case 'select': {
@@ -69,11 +69,18 @@ export function field(obj, f, onChange) {
       const input = el('input', { type: 'color', id, value: value || '#ffffff' });
       input.addEventListener('input', () => onChange(f.key, input.value, false));
       input.addEventListener('change', () => onChange(f.key, input.value, true));
+      const cur = String(value || '').toLowerCase();
       const sw = PALETTE.map((c) => el('button', {
-        class: 'swatch', type: 'button', title: c, style: `background:${c}`,
-        onclick: () => { input.value = c; onChange(f.key, c, true); },
+        class: `swatch${c === cur ? ' on' : ''}`, type: 'button', title: c, 'aria-label': `Cor ${c}`, style: `--c:${c}`,
+        onclick: (e) => {
+          input.value = c;
+          input.parentElement.style.setProperty('--c', c);
+          for (const b of e.currentTarget.parentElement.querySelectorAll('.swatch')) b.classList.toggle('on', b === e.currentTarget);
+          onChange(f.key, c, true);
+        },
       }));
-      control = el('div', { class: 'color-row' }, input, ...sw);
+      control = el('div', { class: 'color-row' }, el('label', { class: 'color-pick', title: 'Escolher outra cor', style: `--c:${value || '#ffffff'}` }, input), ...sw);
+      input.addEventListener('input', () => input.parentElement.style.setProperty('--c', input.value));
       break;
     }
     case 'text':
@@ -82,11 +89,11 @@ export function field(obj, f, onChange) {
       control.addEventListener('change', () => onChange(f.key, control.value, true));
     }
   }
-  return el('div', { class: 'field' }, el('label', { for: id }, f.label), control);
+  return el('div', { class: `field field-${f.type || 'text'}` }, el('label', { for: id, title: f.tip || null }, f.label), control);
 }
 
 export function group(title, children, open = true) {
-  const d = el('details', { class: 'group', open }, el('summary', {}, title));
+  const d = el('details', { class: 'group', open }, el('summary', {}, el('span', {}, title), el('span', { class: 'chev', html: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>' })));
   d.append(...children.filter(Boolean));
   return d;
 }

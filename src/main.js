@@ -7,6 +7,7 @@ import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
 import { LightingMenu } from './ui/lighting.js';
+import { TOOL_ICONS } from './ui/icons.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
 import { customModels } from './builders/assets.js';
@@ -15,15 +16,10 @@ import { nodeHalf, attachEnd } from './builders/corridorPath.js';
 import { closestOnPolyline } from './math/curve.js';
 import { deepClone, uid } from './util.js';
 
-const TOOL_ICONS = {
-  select: 'M5 3l13 8-6 1.5L9 19z',
-  corridor: 'M3 20c3-8 6-12 9-12s4 4 9-4 M5 21c3-8 6-11 8-11s3 3 8-4',
-  wall: 'M3 7h18v10H3z M3 12h18 M9 7v5 M15 12v5',
-  area: 'M4 5h16v14H4z M4 5l3 3h10l3-3 M7 8v8 M17 8v8',
-  connector: 'M4 20h4v-4h4v-4h4V8h4',
-  asset: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5',
-  agent: 'M12 3a3 3 0 1 0 0.01 0z M7 21v-6a5 5 0 0 1 10 0v6',
-  light: 'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z',
+
+const PLAY_BTN = {
+  play: '<svg viewBox="0 0 24 24" class="solid"><path d="M8 5v14l11-7z"/></svg><span>Testar</span>',
+  stop: '<svg viewBox="0 0 24 24" class="solid"><path d="M7 7h10v10H7z"/></svg><span>Parar</span>',
 };
 
 class App {
@@ -37,6 +33,7 @@ class App {
     this.panels = new Panels(this);
     this.lightMenu = new LightingMenu(this);
     this.buildToolbar();
+    this.bindTips();
     this.bindUi();
     this.bindStore();
     this.loadCustomModels().then(() => this.vp.sync({ all: true }));
@@ -50,15 +47,53 @@ class App {
   // ------------------------------------------------------------ UI
   buildToolbar() {
     const bar = document.getElementById('toolbar');
-    for (const [t, info] of Object.entries(TOOL_INFO)) {
-      const b = document.createElement('button');
-      b.className = 'tool-btn';
-      b.dataset.tool = t;
-      b.title = `${info.label} (${info.key})`;
-      b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${TOOL_ICONS[t]}"/></svg><span class="lbl">${info.label}</span><kbd>${info.key}</kbd>`;
-      b.addEventListener('click', () => this.tools.setTool(t));
-      bar.append(b);
+    const groups = [['select'], ['corridor', 'area', 'wall'], ['connector', 'asset', 'light', 'agent']];
+    for (const g of groups) {
+      const box = document.createElement('div');
+      box.className = 'dock-group';
+      for (const t of g) {
+        const info = TOOL_INFO[t];
+        const b = document.createElement('button');
+        b.className = 'tool-btn';
+        b.dataset.tool = t;
+        b.dataset.tip = info.label;
+        b.dataset.key = info.key;
+        b.dataset.side = 'right';
+        b.setAttribute('aria-label', `${info.label} (${info.key})`);
+        b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${TOOL_ICONS[t]}"/></svg>`;
+        b.addEventListener('click', () => this.tools.setTool(t));
+        box.append(b);
+      }
+      bar.append(box);
     }
+  }
+
+  /** Dicas flutuantes para qualquer elemento com data-tip (nome + atalho). */
+  bindTips() {
+    const tip = document.getElementById('tip');
+    let cur = null;
+    const hide = () => { tip.hidden = true; cur = null; };
+    document.addEventListener('pointerover', (e) => {
+      const t = e.target.closest?.('[data-tip]');
+      if (t === cur) return;
+      if (!t || e.pointerType === 'touch') return hide();
+      cur = t;
+      tip.innerHTML = '';
+      tip.append(t.dataset.tip);
+      if (t.dataset.key) { const k = document.createElement('kbd'); k.textContent = t.dataset.key; tip.append(k); }
+      tip.hidden = false;
+      const r = t.getBoundingClientRect();
+      const tr = tip.getBoundingClientRect();
+      let x, y;
+      if (t.dataset.side === 'right') { x = r.right + 10; y = r.top + r.height / 2 - tr.height / 2; }
+      else { x = r.left + r.width / 2 - tr.width / 2; y = r.bottom + 8; }
+      x = Math.max(8, Math.min(window.innerWidth - tr.width - 8, x));
+      tip.style.left = `${x}px`;
+      tip.style.top = `${y}px`;
+    });
+    document.addEventListener('pointerdown', (e) => { const t = cur; hide(); cur = t && t.contains(e.target) ? t : null; });
+    window.addEventListener('play:start', hide);
+    document.addEventListener('pointerleave', hide);
   }
 
   bindUi() {
@@ -69,6 +104,7 @@ class App {
     $('view-top').addEventListener('click', () => this.setView('top'));
     $('btn-snap').addEventListener('click', () => this.toggleSnap());
     $('btn-play').addEventListener('click', () => (this.play.active ? this.play.stop() : this.startPlay()));
+    new ResizeObserver(() => { this.vp.resize(); if (this.play.active) this.play.resize(); }).observe(this.vp.container);
     const name = $('doc-name');
     name.addEventListener('change', () => this.store.mutate((d) => { d.name = name.value; }, { ids: [] }));
 
@@ -95,8 +131,8 @@ class App {
     });
 
     window.addEventListener('keydown', (e) => this.onKey(e));
-    window.addEventListener('play:start', () => { document.body.classList.add('playing'); $('btn-play').textContent = '■ Parar'; });
-    window.addEventListener('play:stop', () => { document.body.classList.remove('playing'); $('btn-play').textContent = '▶ Testar'; this.tools.refreshHandles(); });
+    window.addEventListener('play:start', () => { document.body.classList.add('playing'); $('btn-play').innerHTML = PLAY_BTN.stop; });
+    window.addEventListener('play:stop', () => { document.body.classList.remove('playing'); $('btn-play').innerHTML = PLAY_BTN.play; this.tools.refreshHandles(); });
     window.addEventListener('beforeunload', () => this.store.saveLocal());
   }
 
@@ -117,6 +153,7 @@ class App {
       this.vp.updateVisualStates();
       this.panels.renderOutliner();
       this.panels.renderProps();
+      this.updateChrome();
     });
   }
 
@@ -132,8 +169,21 @@ class App {
     if (document.activeElement !== name) name.value = doc.name;
     const lvl = this.store.activeLevel;
     document.getElementById('status-level').textContent = `${lvl.name} · ${lvl.elevation} m`;
-    document.getElementById('status-hint').textContent = TOOL_INFO[this.tools.tool].hint;
-    document.getElementById('view-hint').textContent = `${this.vp.view === '3d' ? 'Perspectiva' : 'Planta'} · ${lvl.name}`;
+    document.body.dataset.tool = this.tools.tool;
+    document.getElementById('status-hint').textContent = this.contextHint();
+    document.getElementById('view-hint').textContent = this.vp.view === '3d' ? 'Perspectiva' : 'Planta';
+  }
+
+  /** Dica curta para a pílula no rodapé da cena: ferramenta ativa ou o que dá para fazer com a seleção. */
+  contextHint() {
+    const t = this.tools.tool;
+    if (t !== 'select') return TOOL_INFO[t].hint;
+    if (this.store.multi.size > 1) return 'Ctrl+G agrupa e conecta corredores · Del exclui · Esc limpa a seleção';
+    const o = this.store.get(this.store.selection);
+    if (!o) return TOOL_INFO.select.hint;
+    if (o.type === 'corridor') return 'Arraste os quadrados para mover nós · losango cria nó · bolinhas mudam a largura';
+    if (o.type === 'wall' || o.type === 'area') return 'Arraste os quadrados para mover nós · losango cria nó · botão direito remove';
+    return 'Arraste para mover · R gira · Ctrl+D duplica · Del exclui';
   }
 
   setView(v) { this.vp.setView(v); this.updateChrome(); this.tools.refreshHandles(); }
