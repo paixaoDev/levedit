@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { THEME, STIPPLE, applyVisualState, setRoofView } from '../render/materials.js';
 import { LightRig, installRoofShadowPass } from '../render/lighting.js';
 import { buildObject, makeContext } from '../builders/index.js';
+import { levelFootprint, buildBackdrop } from '../builders/backdrop.js';
 
 export class Viewport {
   constructor(container, store) {
@@ -34,7 +35,11 @@ export class Viewport {
     this.helpers = new THREE.Group();
     this.helpers.name = 'helpers';
     this.gridGroup = new THREE.Group();
-    this.scene.add(this.root, this.gridGroup, this.helpers);
+    // fundo (cenário): fora de `root`, então não entra na colisão nem no clique
+    this.backdrop = new THREE.Group();
+    this.backdrop.name = 'backdrop';
+    this.footprint = null;
+    this.scene.add(this.root, this.gridGroup, this.helpers, this.backdrop);
 
     this.persp = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.persp.position.set(28, 34, 42);
@@ -178,6 +183,46 @@ export class Viewport {
     this.root.traverse((m) => { if (m.userData.roof) this.roofs.push(m); });
     this.applyLighting();
     this.updateVisualStates();
+    this.scheduleBackdrop();
+  }
+
+  // ------------------------------------------------------------ fundo
+  /** Reconstrói o cenário de fundo quando o level ou as opções mudam (com atraso durante arrastes). */
+  scheduleBackdrop() {
+    const doc = this.store.doc;
+    const s = doc.settings.backdrop;
+    const sig = s?.enabled ? `${JSON.stringify(s)}|${hashStr(JSON.stringify(doc.objects))}|${hashStr(JSON.stringify(doc.levels))}` : 'off';
+    if (sig === this._bdSig) return;
+    this._bdSig = sig;
+    clearTimeout(this._bdT);
+    if (!s?.enabled) { this._clearBackdrop(); this.footprint = null; this._bdPending = false; return; }
+    this._bdPending = true;
+    this._bdT = setTimeout(() => this.rebuildBackdrop(), this.backdrop.children.length ? 260 : 0);
+  }
+
+  rebuildBackdrop() {
+    clearTimeout(this._bdT);
+    this._bdPending = false;
+    const doc = this.store.doc;
+    const s = doc.settings.backdrop;
+    this._clearBackdrop();
+    if (!s?.enabled) { this.footprint = null; return; }
+    const t0 = performance.now();
+    try {
+      this.footprint = levelFootprint(this.root, (id) => this.store.get(id), { pad: Math.max(8, s.distance) + 14 });
+      const baseY = Math.min(...doc.levels.map((l) => l.elevation));
+      this.backdrop.add(buildBackdrop(this.footprint, s, baseY));
+    } catch (err) {
+      console.error('Falha ao construir o fundo', err);
+    }
+    this.backdropMs = performance.now() - t0;
+  }
+
+  /** Garante o fundo atualizado (o jogo precisa da pegada na hora). */
+  flushBackdrop() { if (this._bdPending) this.rebuildBackdrop(); }
+
+  _clearBackdrop() {
+    for (const c of [...this.backdrop.children]) { this._dispose(c); this.backdrop.remove(c); }
   }
 
   /** Preset de luz, exibição dos tetos e enquadramento das sombras. */
@@ -313,6 +358,12 @@ export class Viewport {
     this.camera.position.add(delta);
     this.controls.update();
   }
+}
+
+function hashStr(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
 }
 
 function isVisibleChain(o) {

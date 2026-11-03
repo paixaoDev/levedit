@@ -7,6 +7,7 @@ import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
 import { LightingMenu } from './ui/lighting.js';
+import { SceneryMenu } from './ui/scenery.js';
 import { TOOL_ICONS } from './ui/icons.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
@@ -32,6 +33,7 @@ class App {
     this.play = new PlayMode(this.vp, this.store);
     this.panels = new Panels(this);
     this.lightMenu = new LightingMenu(this);
+    this.sceneryMenu = new SceneryMenu(this);
     this.buildToolbar();
     this.bindTips();
     this.bindUi();

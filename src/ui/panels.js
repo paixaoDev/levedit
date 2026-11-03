@@ -1,8 +1,8 @@
 // Painéis: níveis, lista de objetos, opções da ferramenta e propriedades.
 import { el, field, group } from './fields.js';
-import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject } from '../model.js';
+import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, WALL_STYLES, WALL_DEFAULTS, makeLevel, normalizeObject, applyWallDefaults } from '../model.js';
 import { ASSET_ICONS } from '../builders/assets.js';
-import { setByPath } from '../util.js';
+import { setByPath, getByPath } from '../util.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
@@ -316,8 +316,8 @@ export class Panels {
       box.append(G('Paredes', [
         F({ key: 'walls.left', label: 'Esquerda', type: 'bool' }),
         F({ key: 'walls.right', label: 'Direita', type: 'bool' }),
-        F({ key: 'walls.thickness', label: 'Espessura', type: 'range', min: 0.05, max: 2, step: 0.05 }),
-        F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' } }),
+        ...this.wallStyleFields(F, 'walls.', o),
+        F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.style === 'smooth' }),
         F({ key: 'walls.capStart', label: 'Fechar início', type: 'bool' }),
         F({ key: 'walls.capEnd', label: 'Fechar fim', type: 'bool' }),
       ]));
@@ -333,8 +333,8 @@ export class Panels {
       box.append(G('Forma', [
         F({ key: 'smooth', label: 'Curvatura', type: 'range', min: 0, max: 1, step: 0.05 }),
         F({ key: 'closed', label: 'Fechada', type: 'bool' }),
-        F({ key: 'thickness', label: 'Espessura', type: 'range', min: 0.05, max: 3, step: 0.05 }),
-        F({ key: 'mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' } }),
+        ...this.wallStyleFields(F, '', o),
+        F({ key: 'mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.style === 'smooth' }),
       ]));
       box.append(G('Regras procedurais', procFields()));
     } else if (o.type === 'area') {
@@ -358,8 +358,8 @@ export class Panels {
       box.append(G('Paredes', [
         F({ key: 'walls.enabled', label: 'Paredes', type: 'bool' }),
         F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => x.walls.enabled }),
-        F({ key: 'walls.thickness', label: 'Espessura', type: 'range', min: 0.05, max: 2, step: 0.05, show: (x) => x.walls.enabled }),
-        F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.enabled }),
+        ...(o.walls.enabled ? this.wallStyleFields(F, 'walls.', o) : []),
+        F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.enabled && x.walls.style === 'smooth' }),
         F({ key: 'walls.color', label: 'Cor', type: 'color', show: (x) => x.walls.enabled }),
       ]));
       box.append(G('Teto e luz', roofFields(F)));
@@ -534,6 +534,19 @@ export class Panels {
     return this.store.doc.objects.filter((x) => x.groupId === o.groupId).map((x) => x.id);
   }
 
+  /** Espessura e estilo: seguem o global (menu Cenário) ou são personalizados nesta parede. */
+  wallStyleFields(F, prefix, o) {
+    const W = { ...WALL_DEFAULTS, ...(this.store.doc.settings.walls || {}) };
+    const isCustom = (x) => !!getByPath(x, `${prefix}custom`);
+    return [
+      F({ key: `${prefix}custom`, label: 'Personalizar', type: 'bool', text: 'espessura e estilo próprios' }),
+      F({ key: `${prefix}thickness`, label: 'Espessura', type: 'range', min: 0.05, max: 6, step: 0.05, show: isCustom }),
+      F({ key: `${prefix}style`, label: 'Estilo', type: 'select', options: WALL_STYLES, show: isCustom }),
+      isCustom(o) ? null
+        : el('p', { class: 'info' }, `Segue o padrão do level: ${W.thickness} m · ${WALL_STYLES[W.style] || W.style} (menu Cenário, no canto da vista).`),
+    ].filter(Boolean);
+  }
+
   change(id, key, value, final) {
     const o = this.store.get(id);
     if (!o) return;
@@ -542,13 +555,14 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'custom', 'walls.custom', 'walls.style'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {
           if (t.fromLevelId === t.levelId) t.fromLevelId = value;
         }
         setByPath(t, key, value);
+        if (/(^|\.)custom$/.test(key)) applyWallDefaults(t, d.settings);
         if (t.points && /^(width|smooth|walls\.)/.test(key)) markEdited(d, t);
         if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
         if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;

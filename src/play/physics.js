@@ -8,7 +8,9 @@ const DIRS = Array.from({ length: 10 }, (_, i) => {
 });
 
 export class World {
-  constructor(root, { groundY = 0, solidGround = true } = {}) {
+  constructor(root, { groundY = 0, solidGround = true, footprint = null } = {}) {
+    // com fundo ligado, o espaço fora da pegada do level é só cenário
+    this.footprint = footprint;
     this.meshes = [];
     this.boxes = [];
     root.updateMatrixWorld(true);
@@ -72,6 +74,20 @@ export class World {
     return hit;
   }
 
+  /** Fora do espaço jogável (só quando há fundo bloqueando)? */
+  blocked(x, z) {
+    return !!this.footprint && this.footprint.blocked(x, z);
+  }
+
+  /** Desfaz o passo que levaria para fora do espaço jogável (deslizando no eixo livre). */
+  keepInside(pos, px, pz) {
+    if (!this.footprint || !this.blocked(pos.x, pos.z) || this.blocked(px, pz)) return false;
+    if (!this.blocked(pos.x, pz)) pos.z = pz;
+    else if (!this.blocked(px, pos.z)) pos.x = px;
+    else { pos.x = px; pos.z = pz; }
+    return true;
+  }
+
   /** Primeiro impacto ao longo de um raio. */
   raycast(origin, dir, far) {
     this.rc.set(origin, dir);
@@ -116,10 +132,12 @@ export class CharacterBody {
     const sdt = dt / steps;
     const wasGround = this.onGround;
     for (let s = 0; s < steps; s++) {
+      const px = this.pos.x, pz = this.pos.z;
       this.pos.x += this.vel.x * sdt;
       this.pos.z += this.vel.z * sdt;
       this.pos.y += this.vel.y * sdt;
       world.pushOut(this.pos, this.radius, [0.6, this.height * 0.6, this.height - 0.15]);
+      world.keepInside?.(this.pos, px, pz);
     }
     const g = world.ground(this.pos, 0.55);
     const snap = wasGround ? 0.35 : 0.02;
@@ -167,9 +185,11 @@ export class CarBody {
     const steps = Math.max(1, Math.ceil((this.vel.length() * dt) / 0.6));
     let hit = false;
     for (let s = 0; s < steps; s++) {
+      const px = this.pos.x, pz = this.pos.z;
       this.pos.addScaledVector(this.vel, dt / steps);
       this.pos.y += (this.vy * dt) / steps;
       if (world.pushOut(this.pos, this.radius, [0.6, 1.1])) hit = true;
+      if (world.keepInside?.(this.pos, px, pz)) hit = true;
     }
     if (hit) { this.speed *= 0.55; this.vel.multiplyScalar(0.6); }
     const g = world.ground(this.pos, 0.7);

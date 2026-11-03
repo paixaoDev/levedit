@@ -17,6 +17,39 @@ export const LIGHTING_DEFAULTS = { preset: 'editor', sunAngle: 35, interior: 0.8
 // Teto: sem teto o espaço recebe o sol; com teto fica só com a luz interna e as luzes pontuais.
 export const ROOF_DEFAULTS = { enabled: false, thickness: 0.2, color: '#f4f1ea' };
 
+// Paredes: espessura e estilo globais. Cada corredor/área/parede segue o global,
+// a não ser que esteja "personalizada" (walls.custom / custom).
+export const WALL_STYLES = {
+  smooth: 'Lisa',
+  rocks: 'Pedras',
+  trees: 'Árvores',
+  bushes: 'Arbustos',
+  cliff: 'Rochedo',
+};
+export const WALL_DEFAULTS = { thickness: 0.3, style: 'smooth' };
+
+// Fundo (cenário fora do espaço jogável): só para ver, não dá para entrar.
+export const BACKDROP_STYLES = {
+  forest: 'Floresta',
+  rocks: 'Pedras',
+  mounds: 'Morros em volta',
+  mountains: 'Montanhas',
+  city: 'Cidade (prédios)',
+};
+export const BACKDROP_DEFAULTS = {
+  enabled: false,
+  style: 'forest',
+  color: '#5f8f6a',
+  color2: '#8a7a62',
+  ground: '#cfd8b8',
+  density: 0.6,
+  height: 1,
+  distance: 45,
+  margin: 1.5,
+  seed: 1,
+  block: true,
+};
+
 export const DECO_TYPES = {
   none: 'Nenhuma',
   flowers: 'Canteiro de flores',
@@ -42,7 +75,7 @@ export const TYPE_DEFAULTS = {
     rampStyle: 'ramp',
     stepHeight: 0.25,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
-    walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: false },
+    walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: false, custom: false, style: 'smooth' },
     roof: ROOF_DEFAULTS,
     proc: PROC_DEFAULTS,
     deco: { type: 'none', side: 'both', density: 0.4, color: '#9bb57a', inset: 0.7, seed: 7 },
@@ -56,6 +89,8 @@ export const TYPE_DEFAULTS = {
     thickness: 0.3,
     color: '#ffffff',
     mode: 'continuous',
+    custom: false,
+    style: 'smooth',
     proc: PROC_DEFAULTS,
   },
   area: {
@@ -64,7 +99,7 @@ export const TYPE_DEFAULTS = {
     closed: true,
     smooth: 0,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
-    walls: { enabled: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous' },
+    walls: { enabled: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', custom: false, style: 'smooth' },
     joins: { areas: 'door' },
     doorWidth: 1.6,
     roof: ROOF_DEFAULTS,
@@ -166,6 +201,9 @@ export function makeObject(type, props = {}) {
 }
 
 export function normalizeObject(obj) {
+  // documentos antigos: espessura diferente da padrão vira parede personalizada
+  const W = wallSlot(obj);
+  if (W && W.custom === undefined && W.thickness != null) W.custom = Math.abs(W.thickness - WALL_DEFAULTS.thickness) > 1e-6;
   withDefaults(obj, TYPE_DEFAULTS[obj.type] || {});
   if (obj.type === 'agent') {
     const def = AGENT_MODES[obj.role]?.[obj.mode];
@@ -177,12 +215,30 @@ export function normalizeObject(obj) {
   return obj;
 }
 
+/** Onde ficam espessura/estilo das paredes do objeto (ou null). */
+export function wallSlot(o) {
+  if (o.type === 'wall') return o;
+  if (o.type === 'corridor' || o.type === 'area') return o.walls || null;
+  return null;
+}
+
+/** Copia espessura e estilo globais para o objeto, se ele não for personalizado. */
+export function applyWallDefaults(o, settings) {
+  const W = wallSlot(o);
+  if (!W || W.custom) return false;
+  const g = { ...WALL_DEFAULTS, ...(settings?.walls || {}) };
+  const changed = W.thickness !== g.thickness || W.style !== g.style;
+  W.thickness = g.thickness;
+  W.style = g.style;
+  return changed;
+}
+
 export function emptyDoc() {
   const l0 = makeLevel('Térreo', 0);
   return {
     version: DOC_VERSION,
     name: 'Novo level',
-    settings: { gridSize: 1, snap: true, otherLevels: 'ghost', solidGround: true, lighting: { ...LIGHTING_DEFAULTS } },
+    settings: { gridSize: 1, snap: true, otherLevels: 'ghost', solidGround: true, lighting: { ...LIGHTING_DEFAULTS }, walls: { ...WALL_DEFAULTS }, backdrop: { ...BACKDROP_DEFAULTS } },
     levels: [l0],
     activeLevelId: l0.id,
     objects: [],
@@ -195,6 +251,7 @@ export function normalizeDoc(doc) {
   if (!d.levels.length) d.levels.push(makeLevel('Térreo', 0));
   if (!d.levels.find((l) => l.id === d.activeLevelId)) d.activeLevelId = d.levels[0].id;
   d.objects = d.objects.filter((o) => TYPE_DEFAULTS[o.type]).map(normalizeObject);
+  for (const o of d.objects) applyWallDefaults(o, d.settings);
   return d;
 }
 
@@ -246,7 +303,7 @@ export function sampleDoc() {
   }));
   objs.push(makeObject('connector', { name: 'Escada', levelId: l0.id, fromLevelId: l0.id, toLevelId: l1.id, x: -9, z: 1.6, rotY: 0, width: 2.5 }));
   objs.push(makeObject('wall', {
-    name: 'Muro curvo', levelId: l0.id, smooth: 0.5, height: 2, thickness: 0.4,
+    name: 'Muro curvo', levelId: l0.id, smooth: 0.5, height: 2, thickness: 0.4, custom: true,
     points: [{ x: -4, z: -4 }, { x: 0, z: -1 }, { x: -4, z: 3 }],
   }));
   objs.push(makeObject('asset', { name: 'Árvore', kind: 'tree', levelId: l0.id, x: 2, z: 5, color: '#9bb57a' }));

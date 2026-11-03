@@ -96,6 +96,9 @@ function buildDoorFrame(group, center, s0, s1, c, W, extra = 0) {
   group.add(makeMesh(boxBetween(a, b, W.thickness + 0.12, y + doorH - 0.12, 0.12), frameColor));
 }
 
+/** Parede lisa (sem estilo procedural de pedras/árvores). */
+const plainWall = (W) => !W.style || W.style === 'smooth';
+
 function buildCorridor(o, ctx) {
   const group = new THREE.Group();
   const { samples: raw, stepped } = corridorSamples(o, ctx);
@@ -168,14 +171,15 @@ function buildCorridor(o, ctx) {
     const center = untangle(pinEnds(offsetPoints(wallSamples, wallFrames, (i) => side * (halfS(wallSamples[i], side, wallFrames[i]) + W.thickness / 2)), side, 'wallPt'), { ref: wallSamples });
     const cuts = J.cuts.filter((c) => c.side === side).map((c) => ({ s0: c.s0 ?? c.s - c.half, s1: c.s1 ?? c.s + c.half, c }));
     group.add(buildWallLine(center, {
-      height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,
+      height: W.height + extra, thickness: W.thickness, color: W.color, mode: W.mode, style: W.style, proc, closed, seedOffset: side > 0 ? 1 : 2, cuts,
     }));
-    for (const { s0, s1, c } of cuts) if (c.style === 'door') buildDoorFrame(group, center, s0, s1, c, W, extra);
+    for (const { s0, s1, c } of cuts) if (c.style === 'door' && plainWall(W)) buildDoorFrame(group, center, s0, s1, c, W, extra);
   }
   if (!closed) {
     const capW = (i) => {
       const a = offsetPoints([samples[i]], [frames[i]], hl(i) + W.thickness)[0];
       const b = offsetPoints([samples[i]], [frames[i]], -hr(i) - W.thickness)[0];
+      if (!plainWall(W)) return buildWallLine([{ ...a, y: samples[i].y, s: 0 }, { ...b, y: samples[i].y, s: 1 }], { ...W, proc: o.proc, mode: 'continuous', seedOffset: i + 3 });
       return makeMesh(boxBetween(a, b, W.thickness, samples[i].y, W.height), W.color);
     };
     if (W.capStart && !J.trims.start && !joints.start) group.add(capW(0));
@@ -208,7 +212,7 @@ function buildWall(o, ctx) {
   const s = samplePath(o.points, { closed: o.closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
   if (s.length < 2) return group;
   for (const p of s) p.y = y;
-  group.add(buildWallLine(s, { height: o.height, thickness: o.thickness, color: o.color, mode: o.mode, proc: o.proc, closed: o.closed }));
+  group.add(buildWallLine(s, { height: o.height, thickness: o.thickness, color: o.color, mode: o.mode, style: o.style, proc: o.proc, closed: o.closed }));
   return group;
 }
 
@@ -235,7 +239,7 @@ function buildArea(o, ctx) {
     // batentes: linha "desenrolada" duas vezes para portas que passam do ponto inicial
     const ring = [...center, ...center.map((p) => ({ ...p, s: p.s + ol.total })), { ...center[0], s: 2 * ol.total }];
     for (const c of J.cuts) {
-      if (c.style !== 'door') continue;
+      if (c.style !== 'door' || !plainWall(o.walls)) continue;
       const [w] = wrapCut({ s0: c.s0, s1: c.s0 + (c.s1 - c.s0) }, ol.total);
       buildDoorFrame(group, ring, w.s0, w.s0 + (c.s1 - c.s0), c, o.walls);
     }

@@ -45,7 +45,9 @@ export class PlayMode {
     }
     this.vp.helpers.visible = false;
     const minY = Math.min(...doc.levels.map((l) => l.elevation));
-    this.world = new World(this.vp.root, { groundY: minY, solidGround: doc.settings.solidGround });
+    this.vp.flushBackdrop();
+    const bd = doc.settings.backdrop;
+    this.world = new World(this.vp.root, { groundY: minY, solidGround: doc.settings.solidGround, footprint: bd?.enabled && bd.block ? this.vp.footprint : null });
     this.minY = minY;
     this.runtime = new THREE.Group();
     this.vp.scene.add(this.runtime);
