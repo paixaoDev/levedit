@@ -201,6 +201,7 @@ export function normalizeDoc(doc) {
 export function sampleDoc() {
   const doc = emptyDoc();
   doc.name = 'Exemplo';
+  doc.settings.lighting.preset = 'day';
   const l0 = doc.levels[0];
   const l1 = makeLevel('Nível 1', 4);
   doc.levels.push(l1);
