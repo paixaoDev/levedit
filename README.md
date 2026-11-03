@@ -62,7 +62,7 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - Corredores e áreas têm **Teto** (com/sem). Sem teto recebe o sol; com teto fica na sombra dele.
 - **Luz interna**: ilumina os espaços com teto e faz sombra (paredes, objetos, agentes) sem precisar de pontos de luz.
 - **Luz (L)**: pontos de luz com cor, intensidade, alcance, altura e sombra, para testar o mapa.
-- No editor o teto aparece pontilhado (ou sólido/oculto); no modo jogo em FPS ele é sólido.
+- No editor o teto aparece só como contorno tracejado, como linha oculta em desenho técnico (ou sólido/oculto); no modo jogo em FPS ele é sólido.
 - Outros níveis em modo "transparentes" aparecem em pontinhos, sem somar camadas quando se sobrepõem.
 
 **Agentes e modo de teste (▶ Testar)**

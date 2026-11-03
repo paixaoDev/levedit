@@ -20,7 +20,7 @@ export const LIGHT_PRESETS = {
   night: { label: 'Noite' },
 };
 
-export const ROOF_VIEWS = { dotted: 'Pontilhado', solid: 'Sólido', hidden: 'Oculto' };
+export const ROOF_VIEWS = { dotted: 'Só linhas tracejadas', solid: 'Sólido', hidden: 'Oculto' };
 
 
 // parâmetros de cada preset (intensidades em escala física do three r160)

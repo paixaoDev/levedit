@@ -20,7 +20,7 @@ export const THEME = {
 /** Escala do padrão de pontos (pixel ratio do renderer). */
 export const STIPPLE = { value: 1 };
 
-// Exibição do teto: 'dotted' (pontilhado), 'solid' ou 'hidden' (só faz sombra).
+// Exibição do teto: 'dotted' (só contorno tracejado), 'solid' ou 'hidden' (só faz sombra).
 let roofView = 'dotted';
 export function setRoofView(v) { roofView = v; }
 export function getRoofView() { return roofView; }
@@ -33,6 +33,10 @@ const edgeMats = {
   selected: new THREE.LineBasicMaterial({ color: THEME.select }),
   roof: new THREE.LineBasicMaterial({ color: 0xc4b79f }),
   hidden: new THREE.LineBasicMaterial({ visible: false }),
+  // teto "em linhas": só o contorno tracejado, como linha oculta em desenho técnico
+  roofDash: new THREE.LineDashedMaterial({ color: THEME.line, dashSize: 0.45, gapSize: 0.3 }),
+  roofDashGhost: new THREE.LineDashedMaterial({ color: 0xcfc3ae, dashSize: 0.45, gapSize: 0.3 }),
+  roofDashSelected: new THREE.LineDashedMaterial({ color: THEME.select, dashSize: 0.45, gapSize: 0.3 }),
 };
 
 /**
@@ -85,12 +89,11 @@ export function getRoofMaterial(color = '#ffffff', ghost = false) {
   const key = `roof|${color}|${view}|${ghost ? 1 : 0}`;
   let m = matCache.get(key);
   if (!m) {
-    if (view === 'hidden') {
-      // invisível, mas continua no shadow map (bloqueia o sol)
+    if (view !== 'solid') {
+      // invisível (linhas ou oculto), mas continua no shadow map (bloqueia o sol)
       m = standard(color, { colorWrite: false, depthWrite: false });
-    } else if (view === 'dotted' || ghost) {
-      const c = new THREE.Color(color).lerp(new THREE.Color(THEME.background), ghost ? 0.45 : 0.15);
-      m = stipple(standard(c, { side: THREE.DoubleSide }), ghost ? 4 : 3.5, ghost ? 0.22 : 0.26);
+    } else if (ghost) {
+      m = stipple(standard(new THREE.Color(color).lerp(new THREE.Color(THEME.background), 0.35), { side: THREE.DoubleSide }), 3, 0.36);
     } else {
       m = standard(color, { side: THREE.DoubleSide });
     }
@@ -140,7 +143,7 @@ export function makeRoofMesh(geometry, color) {
   mesh.userData.roof = true;
   mesh.material = getRoofMaterial(color);
   mesh.raycast = () => {};
-  for (const c of mesh.children) c.userData.roofEdge = true;
+  for (const c of mesh.children) { c.userData.roofEdge = true; c.computeLineDistances(); }
   return mesh;
 }
 
@@ -174,13 +177,16 @@ export function applyVisualState(root, state) {
     if (o.isLineSegments && o.userData.isEdge) {
       o.renderOrder = ghost ? GHOST_ORDER.color : 0;
       if (o.userData.roofEdge) {
-        o.material = getEdgeMaterial(roofView === 'hidden' ? 'hidden' : state === 'selected' ? 'selected' : roofView === 'dotted' || ghost ? 'roof' : 'normal');
+        o.material = getEdgeMaterial(roofView === 'hidden' ? 'hidden'
+          : roofView === 'dotted' ? (state === 'selected' ? 'roofDashSelected' : ghost ? 'roofDashGhost' : 'roofDash')
+          : state === 'selected' ? 'selected' : ghost ? 'ghost' : 'normal');
       } else {
         o.material = getEdgeMaterial(ghost ? 'ghost' : state === 'selected' ? 'selected' : 'normal');
       }
     } else if (o.isMesh && o.userData.roof) {
       o.material = getRoofMaterial(o.userData.baseColor, ghost);
-      setDepthTwin(o, ghost && roofView !== 'hidden');
+      // teto é para ver através: não esconde o que está embaixo
+      setDepthTwin(o, false);
     } else if (o.isMesh && o.userData.baseColor) {
       o.material = getMaterial(o.userData.baseColor, ghost);
       setDepthTwin(o, ghost);
