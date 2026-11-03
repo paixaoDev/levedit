@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
 import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
-import { computeFrames, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
-import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, wallLines, nearestWall, onLine } from './polar.js';
+import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
+import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, attachParam, wallLines, nearestWall, onLine } from './polar.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
@@ -227,7 +227,7 @@ export class Tools extends EventTarget {
         return;
       }
       const last = pts[pts.length - 1];
-      if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.05) pts.push({ x: p.x, z: p.z, pol: p.pol });
+      if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.05) pts.push({ x: p.x, z: p.z, pol: p.pol, onWall: p.onWall });
       this._updateDraftPreview();
       this._emitDraft();
       return;
@@ -280,7 +280,7 @@ export class Tools extends EventTarget {
         else if (d.points.length === 1) {
           const c = this.cursor, a = d.points[0];
           if (Math.hypot(c.x - a.x, c.z - a.z) > 0.3) {
-            d.points.push({ x: c.x, z: c.z, pol: c.pol });
+            d.points.push({ x: c.x, z: c.z, pol: c.pol, onWall: c.onWall });
             this.finishDraft({ keepTool: true });
           }
         }
@@ -594,7 +594,8 @@ export class Tools extends EventTarget {
       const ctx = this.vp.ctx;
       const y = ctx.levelY(o.levelId);
       const line = wallLines({ objects: [o] }, ctx, y)[0];
-      this._railCache = line ? { id: o.id, o, line, y, top: y + H + 0.02 } : { id: o.id, none: true };
+      const th = o.type === 'wall' ? o.thickness : o.walls.thickness;
+      this._railCache = line ? { id: o.id, o, line, y, top: y + H + 0.02, H, th } : { id: o.id, none: true };
     }
     return this._railCache.none ? null : this._railCache;
   }
@@ -614,30 +615,60 @@ export class Tools extends EventTarget {
   _railAt(ndc, touch = false, noSnap = false) {
     const r = this._rail();
     if (!r) return null;
-    const hit = this.vp.groundPoint(ndc, r.top);
-    if (!hit) return null;
-    const c = closestOnPolyline(r.line.pts, hit, r.line.closed);
-    if (!c || c.d > Math.max(0.25, this._worldPx(ndc, r.top, touch ? 26 : 12))) return null;
+    // o cursor sobre a própria parede (face ou topo); no toque, perto do topo também vale
+    const group = this.vp.objects.get(r.o.id);
+    const meshes = [];
+    group?.traverse((m) => { if (m.isMesh && m.visible && !m.userData.floor && !m.userData.roof) meshes.push(m); });
+    const ray = this.vp.raycaster(ndc);
+    const h = meshes.length ? ray.intersectObjects(meshes, false)[0] : null;
+    let hit = h?.point || null;
+    let c = hit && closestOnPolyline(r.line.pts, hit, r.line.closed);
+    if (!c || c.d > r.th / 2 + 0.2) {
+      hit = this.vp.groundPoint(ndc, r.top);
+      c = hit && closestOnPolyline(r.line.pts, hit, r.line.closed);
+      if (!c || c.d > Math.max(r.th / 2 + 0.05, this._worldPx(ndc, r.top, touch ? 26 : 8))) return null;
+    }
+    // em que face está: +1 / -1 (lados) ou 0 (topo)
+    const nx = -c.tz, nz = c.tx;
+    const off = (hit.x - c.x) * nx + (hit.z - c.z) * nz;
+    const side = hit.y < r.top - 0.06 && Math.abs(off) > r.th * 0.25 ? Math.sign(off) : 0;
+    const hy = Math.max(r.y + 0.05, Math.min(r.top, hit.y));
     let S = { x: c.x, z: c.z };
     if (!noSnap) {
       const ps = polarSnap(S, polarSources(this.store.doc, this.vp.ctx, r.y), this.options.polar);
       if (ps && onLine(ps, r.line, 0.08)) S = ps;
     }
-    return { S, tx: c.tx, tz: c.tz, raw: hit, r };
+    return { S, tx: c.tx, tz: c.tz, raw: hit, r, side, hy };
   }
 
   _showRailHint(ra) {
-    const ring = new THREE.Mesh(LINK_GEO.ring, LINK_MAT.ring);
-    ring.position.set(ra.S.x, ra.r.top + 0.02, ra.S.z);
-    ring.rotation.x = -Math.PI / 2;
-    ring.userData.linkHandle = 1.2;
+    // linha percorrendo a parede: na face apontada (na altura do cursor) ou no topo
+    const { r, side, hy } = ra;
+    const pts = r.line.pts;
+    const fr = computeFrames(pts, r.line.closed);
+    const d = side * (r.th / 2 + 0.015);
+    const line = offsetPoints(pts, fr, d).map((q) => new THREE.Vector3(q.x, side ? hy : r.top, q.z));
+    if (r.line.closed && line.length) line.push(line[0].clone());
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(line), GUIDE_MAT.face);
+    l.renderOrder = 40;
+    l.userData.ownGeometry = true;
+    l.raycast = () => {};
+    this.linkHint.add(l);
+    const c = closestOnPolyline(pts, ra.S, r.line.closed);
+    const k = c ? Math.min(fr.length - 1, c.i) : 0;
+    const at = new THREE.Vector3(ra.S.x + fr[k].nx * d, side ? hy : r.top, ra.S.z + fr[k].nz * d);
+    const ring = new THREE.Mesh(LINK_GEO.core, LINK_MAT.ring);
+    ring.position.copy(at);
+    if (side) ring.lookAt(at.x + fr[k].nx * side, at.y, at.z + fr[k].nz * side);
+    else ring.rotation.x = -Math.PI / 2;
+    ring.userData.linkHandle = 1.1;
     ring.userData.pulse = true;
     ring.renderOrder = 41;
     ring.raycast = () => {};
     this.linkHint.add(ring);
     this.linkTip.textContent = 'Clique para puxar uma parede daqui';
     this.linkTip.classList.remove('join');
-    this._linkAt = new THREE.Vector3(ra.S.x, ra.r.top, ra.S.z);
+    this._linkAt = at.clone();
     this.linkTip.hidden = false;
     this._placeLinkTip();
   }
@@ -650,8 +681,8 @@ export class Tools extends EventTarget {
   _extrudeFrom(ra, e) {
     const { S, raw, r } = ra;
     let nx = -ra.tz, nz = ra.tx;
-    let side = (raw.x - S.x) * nx + (raw.z - S.z) * nz;
-    if (Math.abs(side) < 0.08) {
+    let side = ra.side || (raw.x - S.x) * nx + (raw.z - S.z) * nz;
+    if (!ra.side && Math.abs(side) < 0.08) {
       const pol = S.pol;
       let C = pol ? { x: pol.cx, z: pol.cz } : null;
       if (!C && r.o.type === 'area') {
@@ -668,13 +699,22 @@ export class Tools extends EventTarget {
     const count = this.store.doc.objects.filter((o) => o.type === 'wall').length + 1;
     const obj = makeObject('wall', {
       name: `Parede ${count}`, levelId: r.o.levelId, height: this.options.wall.height,
-      points: [{ x: S.x, z: S.z }, { x: E.x, z: E.z }],
+      points: [
+        { x: S.x, z: S.z, att: attachParam(r.o, S) || undefined },
+        { x: E.x, z: E.z, att: this._attachFor(sE.onWall, sE) || undefined },
+      ].map((q) => (q.att ? q : { x: q.x, z: q.z })),
     });
     this.store.addObject(obj);
     this._clearLinkHint();
     this._setControls(false);
     this.drag = { kind: 'point', id: obj.id, index: 1, y: r.y, recorded: true };
     if (this._down) this._down.moved = true;
+  }
+
+  /** Prendedor para um ponto encaixado numa linha de parede (só se a ponta ficar nela). */
+  _attachFor(line, p, selfId = null) {
+    if (!line || line.id === selfId || !onLine(p, line, 0.08)) return null;
+    return attachParam(this.store.get(line.id), p);
   }
 
   // ---------------------------------------------------------- arraste
@@ -707,6 +747,12 @@ export class Tools extends EventTarget {
         const place = (t) => { o.points[d.index] = { ...prev, x: lerp(prev.x, p.x, t), z: lerp(prev.z, p.z, t) }; };
         if (!guard) {
           place(1);
+          if (o.type === 'wall') {
+            // ponta solta sobre outra parede fica presa a ela; fora dela, solta
+            const att = this._attachFor(p.onWall, p, o.id);
+            const { att: _old, ...pt } = o.points[d.index];
+            o.points[d.index] = att ? { ...pt, att } : pt;
+          }
           if (o.type === 'wall' || o.type === 'area') {
             refitArcs(o, d.index, polarSources(doc, this.vp.ctx, d.y, o.id));
             arcToRing(o, d.index, p.pol);
@@ -799,7 +845,7 @@ export class Tools extends EventTarget {
         markEdited(doc, o);
         if (PATH_TYPES.has(o.type)) {
           if (s.snap && !e.altKey) { dx = snap(dx, s.gridSize / 2); dz = snap(dz, s.gridSize / 2); }
-          o.points = d.orig.map((p) => ({ ...p, x: p.x + dx, z: p.z + dz }));
+          o.points = d.orig.map(({ att, ...p }) => ({ ...p, x: p.x + dx, z: p.z + dz })); // mover solta as pontas presas
         } else {
           const step = s.snap && !e.altKey ? s.gridSize / 2 : 0;
           o.x = snap(d.orig.x + dx, step);
@@ -873,6 +919,7 @@ export class Tools extends EventTarget {
       props.smooth = 0;
     } else if (t === 'wall' || t === 'area') {
       props.points = withArcs(points, t === 'area' || !!this.draft?.closed);
+      if (t === 'wall') points.forEach((q, i) => { const att = this._attachFor(q.onWall, q); if (att) props.points[i].att = att; });
     } else props.points = points.map(({ pol, ...q }) => q);
     if (t === 'corridor') {
       Object.assign(props, { width: opt.width, endLevelId: opt.endLevelId || null, rampStyle: opt.rampStyle });
@@ -1290,6 +1337,7 @@ const GUIDE_MAT = {
   grid: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true, opacity: 0.22 }),
   ring: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, opacity: 0.85 }),
   wall: new THREE.LineBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, opacity: 0.95 }),
+  face: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: true, transparent: true, opacity: 0.95, linewidth: 2 }),
   rail: new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.5, gapSize: 0.25, depthTest: false, transparent: true, opacity: 0.95 }),
 };
 

@@ -2,7 +2,7 @@
 // anéis concêntricos + raios a partir do centro de cada sala circular para
 // encaixar paredes, e linhas de parede existentes para "extrudar" paredes novas.
 // Sem Three.js, para poder ser testado no Node.
-import { samplePath, closestOnPolyline, bulgeFor, segmentArc } from '../math/curve.js';
+import { samplePath, closestOnPolyline, bulgeFor, segmentArc, arcPoint } from '../math/curve.js';
 import { areaOutline } from '../builders/corridorPath.js';
 
 const QUARTER = Math.tan(Math.PI / 8); // bulge de 90°
@@ -179,4 +179,82 @@ export function nearestWall(p, lines, maxD = 0.6) {
 export function onLine(p, line, tol = 0.05) {
   const c = closestOnPolyline(line.pts, p, line.closed);
   return !!c && c.d < tol;
+}
+
+// ------------------------------------------------------------------ paredes presas
+// Uma ponta de parede pode ficar presa a outra parede (ou à parede de uma sala
+// circular): o nó guarda `att` e é reposicionado sempre que a origem muda.
+// Sala circular: { id, ang } (ângulo a partir do centro, na linha da parede).
+// Parede solta: { id, seg, t } (fração t do trecho seg, reto ou em arco).
+
+/** Ponto de `src` mais perto de p, como prendedor (ou null se src não aceita). */
+export function attachParam(src, p) {
+  if (!src) return null;
+  const c = circleOf(src);
+  if (c) return { id: src.id, ang: Math.atan2(p.z - c.cz, p.x - c.cx) };
+  if (src.type !== 'wall' || src.points.length < 2) return null;
+  const n = src.points.length;
+  const segs = src.closed ? n : n - 1;
+  let best = null;
+  for (let i = 0; i < segs; i++) {
+    const A = src.points[i], B = src.points[(i + 1) % n];
+    const arc = segmentArc(A, B, A.b);
+    let t, q;
+    if (arc) {
+      let a = Math.atan2(p.z - arc.cz, p.x - arc.cx) - arc.a0;
+      // ângulo relativo no sentido da varredura, dentro de [0, |sweep|]
+      const sg = Math.sign(arc.sweep);
+      a *= sg;
+      a = ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      const sw = Math.abs(arc.sweep);
+      if (a > sw) a = a - sw < 2 * Math.PI - a ? sw : 0;
+      t = a / sw;
+      q = { x: arc.cx + Math.cos(arc.a0 + sg * a) * arc.r, z: arc.cz + Math.sin(arc.a0 + sg * a) * arc.r };
+    } else {
+      const dx = B.x - A.x, dz = B.z - A.z, L2 = dx * dx + dz * dz || 1;
+      t = Math.max(0, Math.min(1, ((p.x - A.x) * dx + (p.z - A.z) * dz) / L2));
+      q = { x: A.x + dx * t, z: A.z + dz * t };
+    }
+    const d = Math.hypot(q.x - p.x, q.z - p.z);
+    if (!best || d < best.d) best = { d, seg: i, t };
+  }
+  return { id: src.id, seg: best.seg, t: +best.t.toFixed(6) };
+}
+
+/** Posição atual do prendedor (ou null se a origem sumiu/mudou demais). */
+export function attachPoint(src, att) {
+  if (!src || !att) return null;
+  if (att.ang != null) {
+    const c = circleOf(src);
+    if (!c) return null;
+    const th = src.walls?.enabled ? src.walls.thickness : 0;
+    const r = Math.max(0.1, c.r - th / 2);
+    return { x: c.cx + Math.cos(att.ang) * r, z: c.cz + Math.sin(att.ang) * r };
+  }
+  if (src.type !== 'wall') return null;
+  const n = src.points.length;
+  const A = src.points[att.seg], B = src.points[(att.seg + 1) % n];
+  if (!A || !B || (!src.closed && att.seg >= n - 1)) return null;
+  const arc = segmentArc(A, B, A.b);
+  if (arc) return arcPoint(arc, att.t);
+  return { x: A.x + (B.x - A.x) * att.t, z: A.z + (B.z - A.z) * att.t };
+}
+
+/** Reposiciona as pontas presas (chamado depois de toda mudança no documento). */
+export function syncAttachments(doc) {
+  const byId = new Map(doc.objects.map((o) => [o.id, o]));
+  for (let pass = 0; pass < 3; pass++) { // paredes presas a paredes presas
+    let moved = false;
+    for (const o of doc.objects) {
+      if (o.type !== 'wall') continue;
+      o.points.forEach((p, i) => {
+        if (!p.att) return;
+        const src = byId.get(p.att.id);
+        const q = src && src.id !== o.id ? attachPoint(src, p.att) : null;
+        if (!q) { const { att, ...rest } = p; o.points[i] = rest; return; }
+        if (Math.abs(q.x - p.x) > 1e-6 || Math.abs(q.z - p.z) > 1e-6) { o.points[i] = { ...p, x: q.x, z: q.z }; moved = true; }
+      });
+    }
+    if (!moved) break;
+  }
 }

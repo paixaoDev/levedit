@@ -283,8 +283,8 @@ class App {
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.hint;
     if (o.type === 'corridor') return 'Arraste os quadrados para mover nós · losango cria nó · bolinhas mudam a largura';
-    if (o.type === 'area' && o.shape === 'circle') return 'Clique na linha tracejada para puxar uma parede · centro move · bolinha muda o raio';
-    if (o.type === 'wall' || o.type === 'area') return 'Clique na linha tracejada para puxar uma parede · quadrados movem nós · losango cria nó';
+    if (o.type === 'area' && o.shape === 'circle') return 'Passe o mouse na parede e clique para puxar uma parede · centro move · bolinha muda o raio';
+    if (o.type === 'wall' || o.type === 'area') return 'Passe o mouse na parede e clique para puxar outra · quadrados movem nós · Alt arrasta';
     return 'Arraste para mover · R gira · Ctrl+D duplica · Del exclui';
   }
 
@@ -300,8 +300,8 @@ class App {
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.touch;
     if (o.type === 'corridor') return 'Arraste nós e bolinhas · segure um nó para remover, ou o corredor para mover';
-    if (o.type === 'area' && o.shape === 'circle') return 'Toque na linha tracejada para puxar uma parede · bolinha muda o raio';
-    if (o.type === 'wall' || o.type === 'area') return 'Toque na linha tracejada para puxar uma parede · arraste os nós';
+    if (o.type === 'area' && o.shape === 'circle') return 'Toque na parede para puxar outra · bolinha muda o raio';
+    if (o.type === 'wall' || o.type === 'area') return 'Toque na parede para puxar outra · arraste os nós';
     return 'Arraste para mover · 2 dedos movem a câmera';
   }
 
@@ -368,7 +368,7 @@ class App {
     const c = deepClone(o);
     c.id = uid(o.type.slice(0, 3));
     c.name = `${o.name} cópia`;
-    if (c.points) c.points = c.points.map((p) => ({ ...p, x: p.x + 2, z: p.z + 2 }));
+    if (c.points) c.points = c.points.map(({ att, ...p }) => ({ ...p, x: p.x + 2, z: p.z + 2 }));
     else { c.x += 2; c.z += 2; }
     this.store.addObject(c);
   }

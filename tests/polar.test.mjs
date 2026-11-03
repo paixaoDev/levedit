@@ -80,3 +80,22 @@ test('ponta arrastada para o mesmo anel do outro nó vira arco; saindo do anel v
   refitArcs(o, 1, SRC);
   assert.equal(o.points[0].b, undefined);
 });
+
+test('ponta presa acompanha a sala circular e a parede de origem', async () => {
+  const { attachParam, syncAttachments } = await import('../src/editor/polar.js');
+  const sala = { id: 'sala', type: 'area', shape: 'circle', walls: { enabled: true, thickness: 0.3 }, points: circlePoints(0, 0, 10) };
+  const S = { x: 0, z: 9.85 };
+  const radial = { id: 'r', type: 'wall', points: [{ ...S, att: attachParam(sala, S) }, { x: 0, z: 7.85 }] };
+  const arco = { id: 'a', type: 'wall', points: [{ x: 7.85, z: 0, b: bulgeFor({ x: 0, z: 0 }, { x: 7.85, z: 0 }, { x: -7.85, z: 0 }, 1) }, { x: -7.85, z: 0 }] };
+  const Q = { x: 0, z: 7.85 };
+  const filha = { id: 'f', type: 'wall', points: [{ ...Q, att: attachParam(arco, Q) }, { x: 0, z: 5.85 }] };
+  const doc = { objects: [sala, radial, arco, filha] };
+  sala.points = circlePoints(2, 0, 12); // move e aumenta a sala
+  arco.points = arco.points.map((p) => ({ ...p, x: p.x + 1 })); // move o arco
+  syncAttachments(doc);
+  assert.ok(near(radial.points[0].x, 2, 1e-6) && near(radial.points[0].z, 11.85, 1e-6));
+  assert.ok(near(filha.points[0].x, 1, 1e-6) && near(filha.points[0].z, 7.85, 1e-6));
+  doc.objects = doc.objects.filter((o) => o.id !== 'arco' && o.id !== 'a'); // origem apagada: solta
+  syncAttachments(doc);
+  assert.equal(filha.points[0].att, undefined);
+});
