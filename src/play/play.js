@@ -6,6 +6,7 @@ import { buildAgentBody, corridorSamples, makeContext } from '../builders/index.
 import { samplePath } from '../math/curve.js';
 import { normalizeObject, makeObject } from '../model.js';
 import { applyVisualState } from '../render/materials.js';
+import { TouchControls, prefersTouch } from './touchControls.js';
 
 const V = () => new THREE.Vector3();
 
@@ -74,6 +75,11 @@ export class PlayMode {
     this.cleared = false;
 
     this.buildHud();
+    if (prefersTouch()) {
+      this.tc = new TouchControls(this.hud, pdata.mode === 'car' || pdata.mode === 'platform' ? pdata.mode : 'fps');
+      this.hud.classList.add('touch');
+      this.hud.querySelector('.hud-help').textContent = this.tc.help;
+    }
     this.resize();
     this.camera.position.copy(this.vp.camera.position);
     this.camera.lookAt(this.player.body.pos);
@@ -99,6 +105,8 @@ export class PlayMode {
     this.vp.helpers.visible = true;
     this.vp.overrideCamera = null;
     this.vp.controls.enabled = true;
+    this.tc?.destroy();
+    this.tc = null;
     this.hud?.remove();
     this.hud = null;
     window.removeEventListener('keydown', this._onKeyDown);
@@ -208,6 +216,7 @@ export class PlayMode {
   }
 
   onMouseDown(e) {
+    if (this.tc && performance.now() - this.tc.lastTouchAt < 1500) return; // clique de compatibilidade do toque
     this.mouseDown = true;
     const pl = this.player;
     if (pl.mode === 'fps') {
@@ -219,6 +228,17 @@ export class PlayMode {
   axis(neg, pos) {
     return (this.keys.has(pos[0]) || this.keys.has(pos[1]) ? 1 : 0) - (this.keys.has(neg[0]) || this.keys.has(neg[1]) ? 1 : 0);
   }
+
+  /** Teclado + joystick na tela: frente (W/↑ ou joystick para cima) e lado (D/→ ou para a direita). */
+  moveInput() {
+    const tc = this.tc;
+    const fwd = this.axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']) + (tc?.y || 0);
+    const str = this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']) + (tc?.x || 0);
+    return { fwd: clamp1(fwd), str: clamp1(str) };
+  }
+
+  /** Pulo pedido neste quadro (Espaço ou botão Pular). */
+  wantsJump() { return this.jumpPressed || !!this.tc?.take('jump'); }
 
   // ------------------------------------------------------------- update
   update(dt) {
@@ -234,6 +254,7 @@ export class PlayMode {
       if (pl.body.pos.y < this.minY - 40) { this.toast('Caiu do level!'); this.respawn(); }
     }
     this.jumpPressed = false;
+    if (this.tc) { this.tc.pressed.clear(); this.tc.takeLook(); } // nada fica guardado para o próximo quadro
     for (const e of this.enemies) if (e.alive) this.updateEnemy(e, dt);
     this.updateProjectiles(dt);
     this.updateEffects(dt);
@@ -242,15 +263,23 @@ export class PlayMode {
 
   updateFps(pl, dt) {
     const p = pl.p;
-    const fwd = this.axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']);
-    const str = this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']);
-    const sp = p.speed * (this.keys.has('ShiftLeft') ? p.sprint : 1);
+    const { fwd, str } = this.moveInput();
+    const tc = this.tc;
+    if (tc) {
+      // arrastar no lado direito mira
+      const { dx, dy } = tc.takeLook();
+      const sens = 0.0045 * (p.sensitivity ?? 1);
+      pl.yaw -= dx * sens;
+      pl.pitch = Math.max(-1.45, Math.min(1.45, pl.pitch - dy * sens));
+    }
+    const sprint = this.keys.has('ShiftLeft') || (tc && tc.magnitude > 0.92);
+    const sp = p.speed * (sprint ? p.sprint : 1);
     const f = V().set(-Math.sin(pl.yaw), 0, -Math.cos(pl.yaw));
     const r = V().set(Math.cos(pl.yaw), 0, -Math.sin(pl.yaw));
     const wish = f.multiplyScalar(fwd).add(r.multiplyScalar(str));
     if (wish.lengthSq() > 1) wish.normalize();
     wish.multiplyScalar(sp);
-    if (this.jumpPressed && pl.body.onGround) pl.body.vel.y = p.jump;
+    if (this.wantsJump() && pl.body.onGround) pl.body.vel.y = p.jump;
     pl.body.update(dt, this.world, wish, { gravity: p.gravity, airControl: 0.4 });
     this.camera.position.copy(pl.body.pos).add(V().set(0, p.eyeHeight, 0));
     this.camera.rotation.set(pl.pitch, pl.yaw, 0, 'YXZ');
@@ -258,7 +287,8 @@ export class PlayMode {
     pl.mesh.rotation.y = pl.yaw + Math.PI;
     // tiro
     pl.fireCd -= dt;
-    if ((this.firing || (this.mouseDown && document.pointerLockElement)) && pl.fireCd <= 0) {
+    const touchFire = tc && (tc.take('fire') || tc.isHeld('fire'));
+    if ((this.firing || touchFire || (this.mouseDown && document.pointerLockElement)) && pl.fireCd <= 0) {
       this.firing = false;
       pl.fireCd = 1 / p.fireRate;
       this.playerShoot(pl);
@@ -287,8 +317,8 @@ export class PlayMode {
     const p = pl.p;
     const rot = this.axis(['KeyQ', 'KeyQ'], ['KeyE', 'KeyE']);
     pl.camYaw -= rot * dt * 2.2;
-    const fwd = this.axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']);
-    const str = this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']);
+    if (this.tc) pl.camYaw -= this.tc.takeLook().dx * 0.008; // arrastar gira a câmera
+    const { fwd, str } = this.moveInput();
     const a = pl.camYaw;
     const f = V().set(-Math.sin(a), 0, -Math.cos(a));
     const r = V().set(Math.cos(a), 0, -Math.sin(a));
@@ -296,12 +326,12 @@ export class PlayMode {
     if (wish.lengthSq() > 1) wish.normalize();
     wish.multiplyScalar(p.speed * (this.keys.has('ShiftLeft') ? 1.4 : 1));
     const b = pl.body;
-    if (this.jumpPressed) {
+    if (this.wantsJump()) {
       if (b.onGround) { b.vel.y = p.jump; b.jumps = 1; }
       else if (p.doubleJump && b.jumps < 2) { b.vel.y = p.jump * 0.85; b.jumps = 2; this.burst(b.pos, 0xd8cbb3); }
     }
     // pulo curto ao soltar
-    if (!this.keys.has('Space') && b.vel.y > 0 && !b.onGround) b.vel.y -= p.gravity * dt * 0.8;
+    if (!this.keys.has('Space') && !this.tc?.isHeld('jump') && b.vel.y > 0 && !b.onGround) b.vel.y -= p.gravity * dt * 0.8;
     b.update(dt, this.world, wish, { gravity: p.gravity, airControl: p.airControl });
     pl.mesh.position.copy(b.pos);
     if (wish.lengthSq() > 0.1) {
@@ -334,10 +364,11 @@ export class PlayMode {
   updateCar(pl, dt) {
     const p = pl.p;
     const b = pl.body;
+    const tc = this.tc;
     const input = {
-      throttle: this.axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']),
-      steer: -this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']),
-      handbrake: this.keys.has('Space'),
+      throttle: clamp1(this.axis(['KeyS', 'ArrowDown'], ['KeyW', 'ArrowUp']) + (tc?.isHeld('gas') ? 1 : 0) - (tc?.isHeld('brake') ? 1 : 0)),
+      steer: -clamp1(this.axis(['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']) + (tc?.x || 0)),
+      handbrake: this.keys.has('Space') || !!tc?.isHeld('drift'),
     };
     b.update(dt, this.world, input, p);
     pl.mesh.position.copy(b.pos);
@@ -654,3 +685,5 @@ function angleDiff(a, b) {
 }
 function lerpAngle(a, b, t) { return a + angleDiff(b, a) * t; }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+function clamp1(v) { return Math.max(-1, Math.min(1, v)); }

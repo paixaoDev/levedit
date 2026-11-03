@@ -7,7 +7,7 @@ import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
 import { LightingMenu } from './ui/lighting.js';
-import { TOOL_ICONS } from './ui/icons.js';
+import { TOOL_ICONS, UI_ICONS, svgIcon } from './ui/icons.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
 import { customModels } from './builders/assets.js';
@@ -33,6 +33,7 @@ class App {
     this.panels = new Panels(this);
     this.lightMenu = new LightingMenu(this);
     this.buildToolbar();
+    this.bindTouchUi();
     this.bindTips();
     this.bindUi();
     this.bindStore();
@@ -66,6 +67,100 @@ class App {
       }
       bar.append(box);
     }
+  }
+
+  // ------------------------------------------------------------ celular
+  /**
+   * Tela de toque: classe "touch" no body (controles maiores), gaveta com abas
+   * para os painéis em telas estreitas e barra de ações rápidas na cena
+   * (Concluir/Desfazer ponto ao desenhar; Vários/Girar/Duplicar/Excluir na seleção).
+   */
+  bindTouchUi() {
+    const mq = window.matchMedia('(pointer: coarse)');
+    const setTouch = () => { document.body.classList.toggle('touch', mq.matches); this.updateChrome?.(); };
+    mq.addEventListener?.('change', setTouch);
+    document.body.classList.toggle('touch', mq.matches);
+
+    // gaveta: só existe no layout estreito (CSS); aqui só guardamos qual aba está aberta
+    this.sheet = null;
+    const tabs = document.getElementById('sheet-tabs');
+    tabs.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-sheet]');
+      if (b) this.setSheet(this.sheet === b.dataset.sheet ? null : b.dataset.sheet);
+    });
+    // escolher asset/agente precisa do painel: abre sozinho no celular
+    this.tools.addEventListener('toolchange', (e) => {
+      const t = e.detail.tool;
+      if ((t === 'asset' || t === 'agent') && !this.sheet && this.isNarrow()) this.setSheet('props');
+    });
+    // abrir um objeto pela lista leva às propriedades dele
+    document.getElementById('outliner').addEventListener('click', (e) => {
+      if (this.isNarrow() && e.target.closest('li.item') && !this.tools.multiSelect) this.setSheet('props');
+    });
+
+    const bar = document.getElementById('touch-bar');
+    bar.addEventListener('click', (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      const t = this.tools;
+      if (act === 'finish') t.draft ? t.finishDraft() : t.setTool('select');
+      else if (act === 'undo-point') t.undoDraftPoint();
+      else if (act === 'cancel') t.cancelDraft();
+      else if (act === 'multi') { t.multiSelect = !t.multiSelect; this.updateTouchBar(); }
+      else if (act === 'rotate') t.rotateSelection(1);
+      else if (act === 'dup') this.duplicateSelection();
+      else if (act === 'del') { for (const id of [...this.store.multi]) this.store.removeObject(id); }
+      else if (act === 'clear') this.store.select(null);
+    });
+    this.tools.addEventListener('draftchange', () => { this.updateTouchBar(); this.updateChrome(); });
+  }
+
+  isNarrow() { return window.matchMedia('(max-width: 900px)').matches; }
+
+  setSheet(name) {
+    this.sheet = name;
+    document.body.dataset.sheet = name || '';
+    document.querySelectorAll('#sheet-tabs button').forEach((b) => {
+      b.classList.toggle('active', b.dataset.sheet === name);
+      b.setAttribute('aria-expanded', String(b.dataset.sheet === name));
+    });
+  }
+
+  /** Barra de ações para quem não tem teclado (só aparece em tela de toque). */
+  updateTouchBar() {
+    const bar = document.getElementById('touch-bar');
+    if (!bar) return;
+    const t = this.tools;
+    const btn = (act, label, icon, cls = '', extra = {}) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `tb-btn ${cls}`;
+      b.dataset.act = act;
+      b.innerHTML = `${icon ? svgIcon(icon) : ''}<span>${label}</span>`;
+      b.setAttribute('aria-label', label);
+      if (extra.disabled) b.disabled = true;
+      if (extra.pressed != null) b.setAttribute('aria-pressed', String(extra.pressed));
+      return b;
+    };
+    const items = [];
+    if (t.draft) {
+      const min = t.draft.type === 'area' ? 3 : 2;
+      items.push(btn('undo-point', 'Desfazer ponto', 'M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3', 'compact'));
+      items.push(btn('cancel', 'Cancelar', UI_ICONS.close, 'compact'));
+      items.push(btn('finish', 'Concluir', 'M5 12l5 5L20 7', 'primary', { disabled: t.draft.points.length < min }));
+    } else if (t.tool !== 'select') {
+      items.push(btn('finish', 'Pronto', 'M5 12l5 5L20 7'));
+    } else {
+      const sel = this.store.get(this.store.selection);
+      if (sel || t.multiSelect) items.push(btn('multi', 'Vários', 'M4 4h7v7H4z M13 13h7v7h-7z M17 4v6 M14 7h6', t.multiSelect ? 'on' : '', { pressed: t.multiSelect }));
+      if (sel) {
+        if (['asset', 'agent', 'connector', 'light'].includes(sel.type) && this.store.multi.size === 1) items.push(btn('rotate', 'Girar', UI_ICONS.reset, 'compact'));
+        if (this.store.multi.size === 1) items.push(btn('dup', 'Duplicar', UI_ICONS.copy, 'compact'));
+        items.push(btn('del', 'Excluir', UI_ICONS.trash, 'danger'));
+      }
+    }
+    bar.replaceChildren(...items);
+    bar.hidden = !items.length;
   }
 
   /** Dicas flutuantes para qualquer elemento com data-tip (nome + atalho). */
@@ -171,12 +266,18 @@ class App {
     document.getElementById('status-level').textContent = `${lvl.name} · ${lvl.elevation} m`;
     document.body.dataset.tool = this.tools.tool;
     document.getElementById('status-hint').textContent = this.contextHint();
+    const sel = this.store.get(this.store.selection);
+    const multi = this.store.multi.size;
+    document.getElementById('sheet-props-label').textContent = multi > 1 ? `${multi} selecionados` : sel ? sel.name || 'Propriedades' : this.tools.tool !== 'select' ? TOOL_INFO[this.tools.tool].label : 'Propriedades';
+    document.getElementById('sheet-tabs').classList.toggle('has-sel', !!sel);
+    this.updateTouchBar();
     document.getElementById('view-hint').textContent = this.vp.view === '3d' ? 'Perspectiva' : 'Planta';
   }
 
   /** Dica curta para a pílula no rodapé da cena: ferramenta ativa ou o que dá para fazer com a seleção. */
   contextHint() {
     const t = this.tools.tool;
+    if (document.body.classList.contains('touch')) return this.touchHint();
     if (t !== 'select') return TOOL_INFO[t].hint;
     if (this.store.multi.size > 1) return 'Ctrl+G agrupa e conecta corredores · Del exclui · Esc limpa a seleção';
     const o = this.store.get(this.store.selection);
@@ -184,6 +285,22 @@ class App {
     if (o.type === 'corridor') return 'Arraste os quadrados para mover nós · losango cria nó · bolinhas mudam a largura';
     if (o.type === 'wall' || o.type === 'area') return 'Arraste os quadrados para mover nós · losango cria nó · botão direito remove';
     return 'Arraste para mover · R gira · Ctrl+D duplica · Del exclui';
+  }
+
+  touchHint() {
+    const t = this.tools.tool;
+    if (t !== 'select') {
+      const d = this.tools.draft;
+      if (d && d.points.length) return 'Toque para o próximo ponto · Concluir termina';
+      return TOOL_INFO[t].touch;
+    }
+    if (this.tools.multiSelect) return 'Toque nos objetos para somar à seleção';
+    if (this.store.multi.size > 1) return 'Vários selecionados · Agrupar fica em Propriedades';
+    const o = this.store.get(this.store.selection);
+    if (!o) return TOOL_INFO.select.touch;
+    if (o.type === 'corridor') return 'Arraste nós e bolinhas · segure um nó para remover, ou o corredor para mover';
+    if (o.type === 'wall' || o.type === 'area') return 'Arraste os nós · losango cria nó · segure um nó para remover, ou o objeto para mover';
+    return 'Arraste para mover · 2 dedos movem a câmera';
   }
 
   setView(v) { this.vp.setView(v); this.updateChrome(); this.tools.refreshHandles(); }

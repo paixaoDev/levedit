@@ -12,14 +12,14 @@ const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
 
 export const TOOL_INFO = {
-  select: { label: 'Selecionar', key: 'V', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
-  corridor: { label: 'Corredor', key: 'C', hint: 'Clique para pôr pontos · Enter ou duplo clique termina · Esc cancela' },
-  wall: { label: 'Parede', key: 'W', hint: 'Clique para pôr pontos · Enter termina · clique no primeiro ponto fecha' },
-  area: { label: 'Área', key: 'A', hint: 'Desenhe o contorno · clique no primeiro ponto ou Enter para fechar' },
-  connector: { label: 'Escada/Rampa', key: 'S', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
-  asset: { label: 'Asset', key: 'O', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
-  agent: { label: 'Agente', key: 'P', hint: 'Escolha player ou inimigo no painel e clique para colocar' },
-  light: { label: 'Luz', key: 'L', hint: 'Clique para colocar um ponto de luz · aparece com a luz Dia, Entardecer ou Noite' },
+  select: { label: 'Selecionar', key: 'V', touch: 'Toque para selecionar · 1 dedo gira · 2 dedos movem e dão zoom', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
+  corridor: { label: 'Corredor', key: 'C', touch: 'Toque para pôr pontos · Concluir termina', hint: 'Clique para pôr pontos · Enter ou duplo clique termina · Esc cancela' },
+  wall: { label: 'Parede', key: 'W', touch: 'Toque para pôr pontos · toque no primeiro ponto fecha', hint: 'Clique para pôr pontos · Enter termina · clique no primeiro ponto fecha' },
+  area: { label: 'Área', key: 'A', touch: 'Toque para desenhar o contorno · toque no primeiro ponto fecha', hint: 'Desenhe o contorno · clique no primeiro ponto ou Enter para fechar' },
+  connector: { label: 'Escada/Rampa', key: 'S', touch: 'Toque para posicionar · liga este andar ao de cima', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
+  asset: { label: 'Asset', key: 'O', touch: 'Escolha o asset em Propriedades e toque na cena para colocar', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
+  agent: { label: 'Agente', key: 'P', touch: 'Escolha player ou inimigo em Propriedades e toque para colocar', hint: 'Escolha player ou inimigo no painel e clique para colocar' },
+  light: { label: 'Luz', key: 'L', touch: 'Toque para colocar um ponto de luz', hint: 'Clique para colocar um ponto de luz · aparece com a luz Dia, Entardecer ou Noite' },
 };
 
 export class Tools extends EventTarget {
@@ -54,6 +54,15 @@ export class Tools extends EventTarget {
     vp.container.appendChild(this.linkTip);
     this._linkAt = null;
     this._down = null;
+    // toque: dedos na tela, gesto de dois dedos (câmera) e toque longo
+    this._touches = new Map();
+    this._multi = false;
+    this._press = null;
+    this._lastTouchAt = 0;
+    this.multiSelect = false; // "somar à seleção" no celular (equivale ao Shift)
+    const mq = window.matchMedia?.('(pointer: coarse)');
+    this.coarse = !!mq?.matches;
+    mq?.addEventListener?.('change', (ev) => { this.coarse = ev.matches; });
     this._bind();
     store.addEventListener('selection', () => this.refreshHandles());
     store.addEventListener('change', () => this.refreshHandles());
@@ -81,12 +90,17 @@ export class Tools extends EventTarget {
   // ---------------------------------------------------------- eventos
   _bind() {
     const dom = this.vp.dom;
-    dom.addEventListener('pointerdown', (e) => this._onDown(e));
+    dom.addEventListener('pointerdown', (e) => { if (!this._synth) this._onDown(e); });
     window.addEventListener('pointermove', (e) => this._onMove(e));
     window.addEventListener('pointerup', (e) => this._onUp(e));
-    dom.addEventListener('contextmenu', (e) => { e.preventDefault(); this._onContext(e); });
-    dom.addEventListener('dblclick', (e) => { if (this.draft) { e.preventDefault(); this.finishDraft(); } });
+    window.addEventListener('pointercancel', (e) => this._onUp(e, true));
+    // no celular o toque longo vira "contextmenu" e dois toques viram "dblclick":
+    // o toque tem seus próprios gestos, então esses eventos são ignorados
+    dom.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!this._recentTouch()) this._onContext(e); });
+    dom.addEventListener('dblclick', (e) => { if (this.draft && !this._recentTouch()) { e.preventDefault(); this.finishDraft(); } });
   }
+
+  _recentTouch() { return performance.now() - this._lastTouchAt < 1200; }
 
   _setControls(on) {
     if (this.vp.controls) this.vp.controls.enabled = on;
@@ -94,14 +108,21 @@ export class Tools extends EventTarget {
 
   _onDown(e) {
     if (this.vp.playing) return;
+    if (e.pointerType === 'touch') { this._touchDown(e); return; }
     this.vp.dom.focus();
     this._down = { x: e.clientX, y: e.clientY, button: e.button, moved: false };
+    this._pointerDown(e);
+  }
+
+  /** Clique (mouse/caneta) ou toque já confirmado: seleciona, arrasta, desenha ou coloca. */
+  _pointerDown(e) {
     if (e.button !== 0) return; // direito/meio: câmera
     const ndc = this.vp.ndc(e);
     const t = this.tool;
+    const touch = e.pointerType === 'touch';
 
     if (t === 'select') {
-      const h = this._pickHandle(ndc);
+      const h = this._pickHandle(ndc, touch);
       if (h) {
         this._setControls(false);
         const o = this.store.get(h.id);
@@ -132,7 +153,7 @@ export class Tools extends EventTarget {
         return;
       }
       const hit = this.vp.pickObject(ndc);
-      if (hit && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      if (hit && (e.shiftKey || e.ctrlKey || e.metaKey || (touch && this.multiSelect))) {
         this.store.select(hit.id, { add: true });
         return;
       }
@@ -169,6 +190,7 @@ export class Tools extends EventTarget {
       const last = pts[pts.length - 1];
       if (!last || Math.hypot(last.x - p.x, last.z - p.z) > 0.05) pts.push({ x: p.x, z: p.z });
       this._updateDraftPreview();
+      this._emitDraft();
       return;
     }
     this._place(p, e.shiftKey);
@@ -176,6 +198,7 @@ export class Tools extends EventTarget {
 
   _onMove(e) {
     if (this.vp.playing) return;
+    if (e.pointerType === 'touch') { this._touchMove(e); return; }
     if (this._down && Math.hypot(e.clientX - this._down.x, e.clientY - this._down.y) > 4) this._down.moved = true;
     if (e.target !== this.vp.dom && !this.drag) return;
     const ndc = this.vp.ndc(e);
@@ -195,7 +218,21 @@ export class Tools extends EventTarget {
     else this._updatePlacePreview();
   }
 
-  _onUp(e) {
+  _onUp(e, cancelled = false) {
+    if (e.pointerType === 'touch') {
+      if (!this._touches.delete(e.pointerId)) return;
+      this._clearPress();
+      const d = this._down;
+      const isTap = d?.touch && d.id === e.pointerId && !d.moved && !d.consumed && !this._multi && !cancelled && !this.drag;
+      if (!this._touches.size) this._multi = false;
+      if (isTap && !this.vp.playing) this._tap(e);
+    }
+    this._finishDrag();
+    this._setControls(true);
+    if (e.button === 0 || e.pointerType === 'touch') this._down = null;
+  }
+
+  _finishDrag() {
     if (this.drag) {
       const d = this.drag;
       this.drag = null;
@@ -209,8 +246,121 @@ export class Tools extends EventTarget {
       this.store.emit({ ids: [], structure: true }); // atualiza painéis
       this._clearLinkHint();
     }
+  }
+
+  // ---------------------------------------------------------- toque
+  // Um dedo: girar a câmera (Planta: mover) e tocar para selecionar/desenhar.
+  // Alças e objetos pequenos já selecionados arrastam direto; um corredor,
+  // parede ou área selecionado arrasta depois de segurar o dedo. Dois dedos:
+  // mover e dar zoom (pinça), sempre, mesmo no meio de um arraste.
+  // Segurar numa alça: remove o nó (quadrado) ou reseta a largura (bolinha).
+  _touchDown(e) {
+    this._lastTouchAt = performance.now();
+    this._touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this._touches.size > 1) { this._beginMultiTouch(); return; }
+    this._multi = false;
+    this._down = { x: e.clientX, y: e.clientY, button: 0, moved: false, touch: true, id: e.pointerId };
+    if (this.tool === 'select') {
+      const ndc = this.vp.ndc(e);
+      const h = this._pickHandle(ndc, true);
+      if (h) {
+        this._pointerDown(e);
+        if (h.kind !== 'mid') {
+          this._armPress(() => {
+            if (!this.drag || this.drag.recorded) return;
+            this.drag = null;
+            this._down.consumed = true;
+            this._contextAction(h);
+            navigator.vibrate?.(12);
+          }, 520);
+        }
+      } else {
+        const hit = this.vp.pickObject(ndc);
+        const o = hit && this.store.isSelected(hit.id) ? this.store.get(hit.id) : null;
+        if (o && MOVABLE.has(o.type)) this._pointerDown(e);
+        else if (o && PATH_TYPES.has(o.type)) {
+          this._armPress(() => {
+            const start = this.vp.groundPoint(ndc, hit.point.y);
+            if (!start) return;
+            this._setControls(false);
+            this.drag = { kind: 'move', id: o.id, y: hit.point.y, start, recorded: false, orig: deepClone(o.points) };
+            this._down.moved = true; // a partir daqui, mexer o dedo arrasta
+            navigator.vibrate?.(12);
+            this.dispatchEvent(new CustomEvent('toast', { detail: 'Arraste para mover' }));
+          }, 420);
+        }
+      }
+    }
+    if (this._down) this._down.ctrlTracks = this.vp.controls?.enabled !== false;
+  }
+
+  _touchMove(e) {
+    if (!this._touches.has(e.pointerId)) return;
+    this._touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this._multi) return;
+    const d = this._down;
+    if (!d || d.id !== e.pointerId) return;
+    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 8) { d.moved = true; this._clearPress(); }
+    if (this.drag && d.moved) this._doDrag(this.vp.ndc(e), e);
+  }
+
+  /** Toque rápido sem arrastar: seleciona, põe ponto ou coloca objeto. */
+  _tap(e) {
+    const ndc = this.vp.ndc(e);
+    if (this.tool === 'select') {
+      const hit = this.vp.pickObject(ndc);
+      if (hit) this.store.select(hit.id, { add: this.multiSelect });
+      else if (!this.multiSelect) this.store.select(null);
+      return;
+    }
+    const p = this._cursorPoint(ndc, e);
+    this.cursor = p;
+    this.dispatchEvent(new CustomEvent('cursor', { detail: p }));
+    this._pointerDown(e);
     this._setControls(true);
-    if (e.button === 0) this._down = null;
+    this._emitDraft();
+  }
+
+  /** Segundo dedo: encerra o que o primeiro fazia e entrega os dois à câmera. */
+  _beginMultiTouch() {
+    this._multi = true;
+    this._clearPress();
+    const d = this._down;
+    this._down = null;
+    this._finishDrag();
+    const c = this.vp.controls;
+    if (!c) return;
+    c.enabled = true;
+    // o OrbitControls só conhece o primeiro dedo se estava ligado quando ele
+    // tocou; se não estava (arraste de alça), apresenta o dedo a ele agora
+    const first = d && this._touches.get(d.id);
+    if (first && !d.ctrlTracks) {
+      this._synth = true;
+      try {
+        this.vp.dom.dispatchEvent(new PointerEvent('pointerdown', {
+          pointerId: d.id, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true,
+          clientX: first.x, clientY: first.y, button: 0, buttons: 1,
+        }));
+      } finally { this._synth = false; }
+    }
+  }
+
+  _armPress(fn, ms) {
+    this._clearPress();
+    this._press = setTimeout(() => { this._press = null; if (this._down && !this._down.moved && !this._multi) fn(); }, ms);
+  }
+
+  _clearPress() { if (this._press) { clearTimeout(this._press); this._press = null; } }
+
+  _emitDraft() { this.dispatchEvent(new CustomEvent('draftchange', { detail: { points: this.draft?.points.length || 0, type: this.draft?.type } })); }
+
+  /** Desfaz o último ponto do rascunho (Backspace ou botão no celular). */
+  undoDraftPoint() {
+    if (!this.draft) return;
+    this.draft.points.pop();
+    if (!this.draft.points.length) this.cancelDraft();
+    else this._updateDraftPreview();
+    this._emitDraft();
   }
 
   _onContext(e) {
@@ -221,15 +371,20 @@ export class Tools extends EventTarget {
     if (this.draft) { this.finishDraft(); return; }
     if (this.tool === 'select') {
       const h = this._pickHandle(this.vp.ndc(e));
-      if (h && h.kind === 'point') this._deletePoint(h.id, h.index);
-      else if (h && h.kind === 'edge') {
-        this.store.mutate((d) => {
-          const pt = d.objects.find((x) => x.id === h.id).points[h.index];
-          delete pt.wl; delete pt.wr;
-        }, { ids: [h.id] });
-      }
+      if (h) this._contextAction(h);
     } else if (this.tool !== 'select') {
       this.setTool('select');
+    }
+  }
+
+  /** Botão direito (ou toque longo) numa alça: remove o nó ou reseta a largura. */
+  _contextAction(h) {
+    if (h.kind === 'point') this._deletePoint(h.id, h.index);
+    else if (h.kind === 'edge') {
+      this.store.mutate((d) => {
+        const pt = d.objects.find((x) => x.id === h.id).points[h.index];
+        delete pt.wl; delete pt.wr;
+      }, { ids: [h.id] });
     }
   }
 
@@ -241,12 +396,7 @@ export class Tools extends EventTarget {
       return true;
     }
     if (e.key === 'Enter' && this.draft) { this.finishDraft(); return true; }
-    if (e.key === 'Backspace' && this.draft) {
-      this.draft.points.pop();
-      if (!this.draft.points.length) this.cancelDraft();
-      else this._updateDraftPreview();
-      return true;
-    }
+    if (e.key === 'Backspace' && this.draft) { this.undoDraftPoint(); return true; }
     return false;
   }
 
@@ -506,12 +656,15 @@ export class Tools extends EventTarget {
       }
       this.setTool('select');
     }
+    this._emitDraft();
   }
 
   cancelDraft() {
+    const had = !!this.draft;
     this.draft = null;
     this._clearPreview();
     this._clearLinkHint();
+    if (had) this._emitDraft();
   }
 
   // ---------------------------------------------------------- indicador de conexão
@@ -751,23 +904,40 @@ export class Tools extends EventTarget {
     return m;
   }
 
-  _pickHandle(ndc) {
+  _pickHandle(ndc, touch = false) {
     if (!this.handles.children.length) return null;
+    const list = this.handles.children.filter((c) => c.userData.handle);
     const rc = this.vp.raycaster(ndc);
-    const hits = rc.intersectObjects(this.handles.children.filter((c) => c.userData.handle), false);
-    if (!hits.length) return null;
+    const hits = rc.intersectObjects(list, false);
     // pontos têm prioridade sobre meios
     const rank = { point: 0, edge: 1, mid: 2 };
-    hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
-    const u = hits[0].object.userData;
+    let obj = null;
+    if (hits.length) {
+      hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
+      obj = hits[0].object;
+    } else if (touch) {
+      // dedo é impreciso: a alça mais perto na tela, num raio de ~30 px
+      const r = this.vp.dom.getBoundingClientRect();
+      const v = new THREE.Vector3();
+      let best = 30;
+      for (const c of list) {
+        v.copy(c.position).project(this.vp.camera);
+        if (v.z > 1) continue;
+        const dist = Math.hypot(((v.x - ndc.x) * r.width) / 2, ((v.y - ndc.y) * r.height) / 2) + (rank[c.userData.handle] ?? 3) * 4;
+        if (dist < best) { best = dist; obj = c; }
+      }
+    }
+    if (!obj) return null;
+    const u = obj.userData;
     return { kind: u.handle, id: u.id, index: u.index, side: u.side, pos: u.pos };
   }
 
   _scaleHandles() {
     const cam = this.vp.camera;
+    const k = this.coarse ? 1.4 : 1; // alças maiores para o dedo
     const scaleFor = (obj) => {
-      if (cam.isOrthographicCamera) return 0.55 / cam.zoom;
-      return Math.max(0.15, cam.position.distanceTo(obj.position) * 0.016);
+      if (cam.isOrthographicCamera) return (0.55 * k) / cam.zoom;
+      return Math.max(0.15, cam.position.distanceTo(obj.position) * 0.016 * k);
     };
     for (const c of this.handles.children) if (c.userData.handle) c.scale.setScalar(scaleFor(c));
     for (const c of this.vp.helpers.children) if (c.userData.draftHandle) c.scale.setScalar(scaleFor(c));
