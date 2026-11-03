@@ -1,5 +1,6 @@
 // Store do documento: mutações, undo/redo por snapshot e autosave local.
-import { normalizeDoc, sampleDoc } from './model.js';
+import { normalizeDoc } from './model.js';
+import { sampleDoc } from './sample.js';
 import { debounce, deepClone } from './util.js';
 import { syncLinks, markEdited } from './builders/corridorPath.js';
 import { syncAttachments } from './editor/polar.js';
