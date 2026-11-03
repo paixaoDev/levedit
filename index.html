@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Levedit · editor de levels</title>
   <meta name="description" content="Editor de levels 3D para mockups de jogos: corredores por curva com paredes procedurais, níveis, assets coloríveis e agentes jogáveis." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23fbfaf6'/%3E%3Cpath d='M4 17c4 0 4-10 8-10s4 10 8 10' fill='none' stroke='%238a7a62' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232f2a24'/%3E%3Cpath d='M4 16c4 0 4-8 8-8s4 8 8 8' fill='none' stroke='%23f6f1e7' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -13,107 +16,109 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand" title="Levedit">
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 17c4.5 0 4.5-10 9-10s4.5 10 9 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="3" cy="17" r="1.6" fill="currentColor"/><circle cx="12" cy="7" r="1.6" fill="currentColor"/><circle cx="21" cy="17" r="1.6" fill="currentColor"/></svg>
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 16c4 0 4-8 8-8s4 8 8 8"/></svg></span>
       <span class="brand-name">levedit</span>
-      <input id="doc-name" class="doc-name" spellcheck="false" aria-label="Nome do level" />
+      <span class="crumb-sep" aria-hidden="true">/</span>
+      <input id="doc-name" class="doc-name" spellcheck="false" aria-label="Nome do level" title="Renomear level" />
     </div>
-    <nav class="toolbar" id="toolbar" aria-label="Ferramentas"></nav>
-    <div class="spacer"></div>
-    <div class="toolbar">
-      <button class="icon-btn" id="btn-undo" title="Desfazer (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
-      <button class="icon-btn" id="btn-redo" title="Refazer (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
-      <div class="sep"></div>
+
+    <div class="topbar-center">
       <div class="seg" role="group" aria-label="Vista">
-        <button id="view-3d" class="active" title="Vista 3D (T)">3D</button>
-        <button id="view-top" title="Planta / top-down (T)">Planta</button>
+        <button id="view-3d" class="active" data-tip="Vista 3D" data-key="T">3D</button>
+        <button id="view-top" data-tip="Planta (de cima)" data-key="T">Planta</button>
       </div>
-      <button class="chip" id="btn-snap" title="Ímã na grade (G)">Grade</button>
-      <div class="sep"></div>
+    </div>
+
+    <div class="topbar-right">
+      <button class="icon-btn" id="btn-undo" data-tip="Desfazer" data-key="Ctrl Z" aria-label="Desfazer"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+      <button class="icon-btn" id="btn-redo" data-tip="Refazer" data-key="Ctrl ⇧ Z" aria-label="Refazer"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+      <button class="icon-btn toggle-btn" id="btn-snap" data-tip="Ímã na grade" data-key="G" aria-label="Ímã na grade"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 10h16M4 15h16M10 4v16M15 4v16" opacity=".55"/></svg></button>
       <div class="menu">
-        <button class="btn" id="btn-file">Arquivo ▾</button>
-        <div class="menu-pop" id="menu-file" hidden>
-          <button data-act="new">Novo level vazio</button>
-          <button data-act="sample">Carregar exemplo</button>
+        <button class="icon-btn" id="btn-file" data-tip="Arquivo" aria-label="Arquivo" aria-haspopup="menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <div class="menu-pop" id="menu-file" role="menu" hidden>
+          <div class="menu-label">Level</div>
+          <button data-act="new"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z M14 3v4h4"/></svg>Novo level vazio</button>
+          <button data-act="sample"><svg viewBox="0 0 24 24"><path d="M4 16c4 0 4-8 8-8s4 8 8 8"/></svg>Carregar exemplo</button>
+          <button data-act="open"><svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>Abrir JSON…</button>
+          <button data-act="save"><svg viewBox="0 0 24 24"><path d="M12 4v11 M7 10l5 5 5-5 M5 20h14"/></svg>Salvar JSON<kbd>Ctrl S</kbd></button>
           <hr />
-          <button data-act="open">Abrir JSON…</button>
-          <button data-act="save">Salvar JSON</button>
+          <div class="menu-label">Exportar e importar</div>
+          <button data-act="import-model"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5"/></svg>Importar modelo 3D (GLB/GLTF)…</button>
+          <button data-act="export-glb"><svg viewBox="0 0 24 24"><path d="M12 20V9 M7 13l5-5 5 5 M5 4h14"/></svg>Exportar cena GLB</button>
+          <button data-act="screenshot"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Capturar imagem PNG</button>
           <hr />
-          <button data-act="import-model">Importar modelo 3D (GLB/GLTF)…</button>
-          <button data-act="export-glb">Exportar cena GLB</button>
-          <button data-act="screenshot">Capturar imagem PNG</button>
-          <hr />
-          <button data-act="help">Atalhos e ajuda</button>
+          <button data-act="help"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14 M12 17.5v.01"/></svg>Atalhos e ajuda<kbd>?</kbd></button>
         </div>
       </div>
-      <button class="btn primary" id="btn-play" title="Testar o level (Ctrl+Enter)">▶ Testar</button>
+      <button class="btn primary play" id="btn-play" data-tip="Testar o level" data-key="Ctrl ↵"><svg viewBox="0 0 24 24" class="solid"><path d="M8 5v14l11-7z"/></svg><span>Testar</span></button>
     </div>
   </header>
 
   <main class="layout">
-    <aside class="panel left" aria-label="Níveis e objetos">
+    <aside class="panel left" aria-label="Andares e objetos">
       <section class="section">
         <div class="section-head">
-          <h2>Níveis</h2>
+          <h2>Andares</h2>
           <div class="row-actions">
-            <button class="mini" id="lvl-add-up" title="Adicionar nível acima">+ acima</button>
-            <button class="mini" id="lvl-add-down" title="Adicionar nível abaixo">+ abaixo</button>
+            <button class="icon-btn sm" id="lvl-add-up" data-tip="Novo andar acima" aria-label="Novo andar acima"><svg viewBox="0 0 24 24"><path d="M12 19V7 M6 12l6-6 6 6"/></svg></button>
+            <button class="icon-btn sm" id="lvl-add-down" data-tip="Novo andar abaixo" aria-label="Novo andar abaixo"><svg viewBox="0 0 24 24"><path d="M12 5v12 M6 12l6 6 6-6"/></svg></button>
           </div>
         </div>
         <ul class="levels" id="levels"></ul>
-        <label class="inline-field">Outros níveis
+        <label class="inline-field">Outros andares
           <select id="other-levels">
-            <option value="ghost">transparentes</option>
-            <option value="normal">normais</option>
-            <option value="hide">ocultos</option>
+            <option value="ghost">Transparentes</option>
+            <option value="normal">Normais</option>
+            <option value="hide">Ocultos</option>
           </select>
         </label>
       </section>
       <section class="section grow">
-        <div class="section-head"><h2>Objetos</h2><span class="muted" id="obj-count"></span></div>
+        <div class="section-head"><h2>Objetos</h2><span class="count" id="obj-count"></span></div>
         <ul class="outliner" id="outliner"></ul>
       </section>
     </aside>
 
     <div class="viewport" id="viewport">
+      <nav class="dock" id="toolbar" aria-label="Ferramentas"></nav>
       <div class="view-hint" id="view-hint"></div>
+      <div class="hint-pill" id="status-hint"></div>
+      <div class="coords"><span id="status-level"></span><span id="status-cursor" class="mono"></span></div>
     </div>
 
     <aside class="panel right" aria-label="Propriedades">
-      <section class="section" id="tool-options"></section>
+      <section class="section tool-card" id="tool-options"></section>
       <section class="section grow" id="props"></section>
     </aside>
   </main>
 
-  <footer class="statusbar">
-    <span id="status-hint"></span>
-    <span class="spacer"></span>
-    <span id="status-level"></span>
-    <span id="status-cursor" class="mono"></span>
-  </footer>
-
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="tip" id="tip" role="tooltip" hidden></div>
 
   <dialog id="help-dialog" class="dialog">
-    <h3>Atalhos</h3>
+    <div class="dialog-head"><h3>Atalhos e ajuda</h3><form method="dialog"><button class="icon-btn" aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></form></div>
+    <h4>Ferramentas</h4>
     <div class="help-grid">
       <div><kbd>V</kbd> Selecionar</div><div><kbd>C</kbd> Corredor</div>
-      <div><kbd>W</kbd> Parede</div><div><kbd>A</kbd> Área</div>
+      <div><kbd>A</kbd> Área</div><div><kbd>W</kbd> Parede</div>
       <div><kbd>S</kbd> Escada/rampa</div><div><kbd>O</kbd> Asset</div>
       <div><kbd>P</kbd> Agente</div><div><kbd>T</kbd> 3D / Planta</div>
+    </div>
+    <h4>Edição</h4>
+    <div class="help-grid">
       <div><kbd>G</kbd> Ímã na grade</div><div><kbd>F</kbd> Focar seleção</div>
       <div><kbd>R</kbd> Girar 15° (Shift inverte)</div><div><kbd>Del</kbd> Excluir</div>
-      <div><kbd>Ctrl</kbd>+<kbd>D</kbd> Duplicar</div><div><kbd>Ctrl</kbd>+<kbd>Z</kbd> Desfazer</div>
-      <div><kbd>PgUp</kbd>/<kbd>PgDn</kbd> Trocar nível</div><div><kbd>Ctrl</kbd>+<kbd>Enter</kbd> Testar</div>
-      <div><kbd>Shift</kbd>+clique Somar à seleção</div><div><kbd>Ctrl</kbd>+<kbd>G</kbd> Agrupar e conectar</div>
+      <div><kbd>Ctrl</kbd> <kbd>D</kbd> Duplicar</div><div><kbd>Ctrl</kbd> <kbd>Z</kbd> Desfazer</div>
+      <div><kbd>Shift</kbd> + clique Somar à seleção</div><div><kbd>Ctrl</kbd> <kbd>G</kbd> Agrupar e conectar</div>
+      <div><kbd>PgUp</kbd> <kbd>PgDn</kbd> Trocar andar</div><div><kbd>Ctrl</kbd> <kbd>↵</kbd> Testar</div>
     </div>
-    <h3>Câmera</h3>
-    <p>Arraste com o botão esquerdo no vazio ou com o direito para girar · botão do meio ou Shift+arrastar para mover · roda para zoom. Na Planta, qualquer botão move.</p>
-    <h3>Curvas</h3>
-    <p>Selecione um corredor/parede/área: quadrados são nós (arraste; botão direito ou Alt+clique remove), losangos no meio de cada trecho criam um nó novo ao arrastar. Nos corredores, as bolinhas laranja nas quinas de cada nó mudam a largura só ali (Shift muda os dois lados, botão direito reseta) empurram um corredor vizinho sem agentes; se ele tiver agentes, ou for parede/área, param rente (Alt atravessa). Mover um nó do meio segue a mesma regra. "Curvatura" 0 deixa cantos vivos. Alt desliga o ímã.</p>
-    <h3>Junções e grupos</h3>
-    <p>Comece ou termine um corredor sobre outro: ele ramifica e a parede do outro abre com porta (ou abertura livre, escolha em Junções). Um anel laranja com rótulo mostra onde a ponta vai se conectar antes de soltar. O mesmo vale para áreas: um corredor que termina dentro ou na borda de uma área abre porta nela, e áreas encostadas ganham uma porta na parede em comum. Selecione corredores com Shift+clique e aperte Ctrl+G: eles passam a compartilhar estilo e a ponta mais próxima se conecta ao primeiro selecionado.</p>
-    <form method="dialog"><button class="btn primary">Fechar</button></form>
+    <h4>Câmera</h4>
+    <p>Arraste no vazio (ou com o botão direito) para girar · botão do meio ou Shift+arrastar para mover · roda para zoom. Na Planta, qualquer botão move.</p>
+    <h4>Curvas</h4>
+    <p>Com um corredor, parede ou área selecionado: <b>quadrados</b> são nós (arraste; botão direito ou Alt+clique remove) e <b>losangos</b> no meio de cada trecho criam um nó novo. Nos corredores, as <b>bolinhas</b> nas quinas mudam a largura só naquele nó (Shift muda os dois lados, botão direito reseta). Engordar ou mover um nó empurra um corredor vizinho sem agentes; se ele tiver agentes, ou for parede/área, para rente (Alt atravessa). "Curvatura" 0 deixa cantos vivos. Alt desliga o ímã.</p>
+    <h4>Junções e grupos</h4>
+    <p>Comece ou termine um corredor sobre outro: ele ramifica e a parede do outro abre com porta. Um anel laranja mostra onde a ponta vai se conectar. Um corredor que termina dentro ou na borda de uma área abre porta nela, e áreas encostadas ganham porta na parede em comum. Selecione corredores com Shift+clique e aperte Ctrl+G para que compartilhem estilo e se conectem.</p>
   </dialog>
 
   <input type="file" id="file-json" accept=".json,application/json" hidden />
