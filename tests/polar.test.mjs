@@ -70,3 +70,13 @@ test('mover a ponta de um arco ao longo do anel mantém o arco no anel', () => {
   const arc = segmentArc(o.points[0], o.points[1], o.points[0].b);
   assert.ok(near(arc.cx, 0) && near(arc.cz, 0) && arc.sweep > 0);
 });
+
+test('ponta arrastada para o mesmo anel do outro nó vira arco; saindo do anel volta a ser reta', async () => {
+  const { arcToRing } = await import('../src/editor/polar.js');
+  const o = { type: 'wall', points: [{ x: 7.85, z: 0 }, { x: 0, z: 7.85 }] };
+  arcToRing(o, 1, { cx: 0, cz: 0, r: 7.85, ring: 1 });
+  assert.ok(o.points[0].b > 0);
+  o.points[1] = { x: 0, z: 3.85 };
+  refitArcs(o, 1, SRC);
+  assert.equal(o.points[0].b, undefined);
+});

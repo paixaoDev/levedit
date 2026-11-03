@@ -106,6 +106,7 @@ export function refitArcs(o, i, sources) {
     const A = o.points[a], B = o.points[(a + 1) % n];
     if (!A.b) continue;
     const old = segmentArc(A, B, A.b);
+    let fitted = false;
     for (const s of sources) {
       const C = { x: s.cx, z: s.cz };
       const ra = Math.hypot(A.x - C.x, A.z - C.z), rb = Math.hypot(B.x - C.x, B.z - C.z);
@@ -113,8 +114,32 @@ export function refitArcs(o, i, sources) {
       const b = bulgeFor(C, A, B, old ? Math.sign(old.sweep) : 0);
       o.points[a] = { ...A, b: b || undefined };
       if (!b) delete o.points[a].b;
+      fitted = true;
       break;
     }
+    // as pontas saíram do anel: o trecho volta a ser reto
+    if (!fitted) { o.points[a] = { ...A }; delete o.points[a].b; }
+  }
+}
+
+/**
+ * O nó `i` acabou de encaixar no anel `pol`: o trecho até um vizinho que está no
+ * mesmo anel vira arco (o caminho mais curto).
+ */
+export function arcToRing(o, i, pol) {
+  if (!pol || pol.ring < 0) return;
+  const n = o.points.length;
+  const closed = o.type === 'area' || o.closed;
+  for (const j of [i - 1, i]) {
+    const a = closed ? ((j % n) + n) % n : j;
+    if (a < 0 || (!closed && a >= n - 1) || n < 2) continue;
+    const bi = (a + 1) % n;
+    const A = o.points[a], B = o.points[bi];
+    if (A.b) continue;
+    const other = a === i ? B : A;
+    if (Math.abs(Math.hypot(other.x - pol.cx, other.z - pol.cz) - pol.r) > 0.05) continue;
+    const b = bulgeFor({ x: pol.cx, z: pol.cz }, A, B);
+    if (b) o.points[a] = { ...A, b };
   }
 }
 

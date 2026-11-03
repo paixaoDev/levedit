@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { makeObject, ASSET_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
 import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
-import { computeFrames, samplePath, segmentArc, arcPoint, hasArcs, expandArcs } from '../math/curve.js';
-import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, wallLines, nearestWall, onLine } from './polar.js';
+import { computeFrames, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
+import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, wallLines, nearestWall, onLine } from './polar.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
@@ -71,8 +71,8 @@ export class Tools extends EventTarget {
     this.coarse = !!mq?.matches;
     mq?.addEventListener?.('change', (ev) => { this.coarse = ev.matches; });
     this._bind();
-    store.addEventListener('selection', () => this.refreshHandles());
-    store.addEventListener('change', () => { this._guideCache = null; this.refreshHandles(); });
+    store.addEventListener('selection', () => { this._railCache = null; this.refreshHandles(); });
+    store.addEventListener('change', () => { this._guideCache = null; this._railCache = null; this.refreshHandles(); });
     vp.onFrame.push(() => { this._scaleHandles(); this._animateLinkHint(); });
   }
 
@@ -177,6 +177,10 @@ export class Tools extends EventTarget {
         }
         return;
       }
+      // linha-guia da parede selecionada: clicar puxa uma parede nova dali
+      // (Alt arrasta a parede selecionada em vez de puxar uma nova)
+      const ra = e.altKey ? null : this._railAt(ndc, touch);
+      if (ra) { this._extrudeFrom(ra, e); return; }
       const hit = this.vp.pickObject(ndc);
       if (hit && (e.shiftKey || e.ctrlKey || e.metaKey || (touch && this.multiSelect))) {
         this.store.select(hit.id, { add: true });
@@ -241,7 +245,9 @@ export class Tools extends EventTarget {
     if (this.tool === 'select') {
       this._clearLinkHint();
       const h = this._pickHandle(ndc);
-      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : 'default';
+      const ra = h || e.altKey ? null : this._railAt(ndc);
+      if (ra) this._showRailHint(ra);
+      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : ra ? 'copy' : 'default';
       return;
     }
     const p = this._cursorPoint(ndc, e);
@@ -327,6 +333,8 @@ export class Tools extends EventTarget {
             navigator.vibrate?.(12);
           }, 520);
         }
+      } else if (this._railAt(ndc, true)) {
+        this._pointerDown(e); // toque na linha-guia: puxa a parede e já arrasta a ponta
       } else {
         const hit = this.vp.pickObject(ndc);
         const o = hit && this.store.isSelected(hit.id) ? this.store.get(hit.id) : null;
@@ -575,6 +583,100 @@ export class Tools extends EventTarget {
     }
   }
 
+  // ---------------------------------------------------------- linha-guia (extrudar)
+  /** Linha-guia da parede selecionada (parede solta ou parede de área). */
+  _rail() {
+    const o = this.store.get(this.store.selection);
+    if (!o || this.store.multi.size > 1 || this.vp.playing) return null;
+    const H = o.type === 'wall' ? o.height : o.type === 'area' && o.walls?.enabled ? o.walls.height : null;
+    if (H == null) return null;
+    if (this._railCache?.id !== o.id) {
+      const ctx = this.vp.ctx;
+      const y = ctx.levelY(o.levelId);
+      const line = wallLines({ objects: [o] }, ctx, y)[0];
+      this._railCache = line ? { id: o.id, o, line, y, top: y + H + 0.02 } : { id: o.id, none: true };
+    }
+    return this._railCache.none ? null : this._railCache;
+  }
+
+  /** Quantos metros valem `px` pixels de tela perto de ndc, no plano y. */
+  _worldPx(ndc, y, px) {
+    const a = this.vp.groundPoint(ndc, y);
+    const r = this.vp.dom.getBoundingClientRect();
+    const b = this.vp.groundPoint(new THREE.Vector2(ndc.x + (2 * px) / (r.width || 1), ndc.y), y);
+    return a && b ? a.distanceTo(b) : 0.5;
+  }
+
+  /**
+   * Ponto da linha-guia sob o cursor: { S, tx, tz, raw, r } ou null. Numa parede
+   * que segue um anel, o ponto encaixa nos raios da grade polar.
+   */
+  _railAt(ndc, touch = false, noSnap = false) {
+    const r = this._rail();
+    if (!r) return null;
+    const hit = this.vp.groundPoint(ndc, r.top);
+    if (!hit) return null;
+    const c = closestOnPolyline(r.line.pts, hit, r.line.closed);
+    if (!c || c.d > Math.max(0.25, this._worldPx(ndc, r.top, touch ? 26 : 12))) return null;
+    let S = { x: c.x, z: c.z };
+    if (!noSnap) {
+      const ps = polarSnap(S, polarSources(this.store.doc, this.vp.ctx, r.y), this.options.polar);
+      if (ps && onLine(ps, r.line, 0.08)) S = ps;
+    }
+    return { S, tx: c.tx, tz: c.tz, raw: hit, r };
+  }
+
+  _showRailHint(ra) {
+    const ring = new THREE.Mesh(LINK_GEO.ring, LINK_MAT.ring);
+    ring.position.set(ra.S.x, ra.r.top + 0.02, ra.S.z);
+    ring.rotation.x = -Math.PI / 2;
+    ring.userData.linkHandle = 1.2;
+    ring.userData.pulse = true;
+    ring.renderOrder = 41;
+    ring.raycast = () => {};
+    this.linkHint.add(ring);
+    this.linkTip.textContent = 'Clique para puxar uma parede daqui';
+    this.linkTip.classList.remove('join');
+    this._linkAt = new THREE.Vector3(ra.S.x, ra.r.top, ra.S.z);
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+  }
+
+  /**
+   * Cria uma parede saindo da linha-guia, perpendicular a ela (no anel, vira
+   * radial), para o lado do cursor; sem lado claro, para dentro da sala. Já
+   * começa arrastando a ponta nova.
+   */
+  _extrudeFrom(ra, e) {
+    const { S, raw, r } = ra;
+    let nx = -ra.tz, nz = ra.tx;
+    let side = (raw.x - S.x) * nx + (raw.z - S.z) * nz;
+    if (Math.abs(side) < 0.08) {
+      const pol = S.pol;
+      let C = pol ? { x: pol.cx, z: pol.cz } : null;
+      if (!C && r.o.type === 'area') {
+        const pts = r.o.points;
+        C = { x: pts.reduce((a, p) => a + p.x, 0) / pts.length, z: pts.reduce((a, p) => a + p.z, 0) / pts.length };
+      }
+      side = C ? (C.x - S.x) * nx + (C.z - S.z) * nz : 1;
+    }
+    if (side < 0) { nx = -nx; nz = -nz; }
+    const L = this.options.polar.step;
+    let E = { x: S.x + nx * L, z: S.z + nz * L };
+    const sE = this.snapPoint(E, e.altKey, null, false, r.y, 'wall');
+    if (Math.hypot(sE.x - S.x, sE.z - S.z) > 0.3) E = sE;
+    const count = this.store.doc.objects.filter((o) => o.type === 'wall').length + 1;
+    const obj = makeObject('wall', {
+      name: `Parede ${count}`, levelId: r.o.levelId, height: this.options.wall.height,
+      points: [{ x: S.x, z: S.z }, { x: E.x, z: E.z }],
+    });
+    this.store.addObject(obj);
+    this._clearLinkHint();
+    this._setControls(false);
+    this.drag = { kind: 'point', id: obj.id, index: 1, y: r.y, recorded: true };
+    if (this._down) this._down.moved = true;
+  }
+
   // ---------------------------------------------------------- arraste
   _doDrag(ndc, e) {
     const d = this.drag;
@@ -605,7 +707,10 @@ export class Tools extends EventTarget {
         const place = (t) => { o.points[d.index] = { ...prev, x: lerp(prev.x, p.x, t), z: lerp(prev.z, p.z, t) }; };
         if (!guard) {
           place(1);
-          if (o.type === 'wall' || o.type === 'area') refitArcs(o, d.index, polarSources(doc, this.vp.ctx, d.y, o.id));
+          if (o.type === 'wall' || o.type === 'area') {
+            refitArcs(o, d.index, polarSources(doc, this.vp.ctx, d.y, o.id));
+            arcToRing(o, d.index, p.pol);
+          }
           return;
         }
         const ctx = this.vp.ctx;
@@ -1024,6 +1129,16 @@ export class Tools extends EventTarget {
     if (this.vp.playing) return;
     const o = this.store.get(this.store.selection);
     if (!o || !PATH_TYPES.has(o.type)) return;
+    const rail = this._rail();
+    if (rail) {
+      const pts = rail.line.pts.map((q) => new THREE.Vector3(q.x, rail.top, q.z));
+      if (rail.line.closed && pts.length) pts.push(pts[0].clone());
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), GUIDE_MAT.rail);
+      l.computeLineDistances();
+      l.renderOrder = 18;
+      l.raycast = () => {};
+      this.handles.add(l);
+    }
     const y0 = this.vp.ctx.levelY(o.levelId);
     const y1 = o.type === 'corridor' && o.endLevelId ? this.vp.ctx.levelY(o.endLevelId) : y0;
     const n = o.points.length;
@@ -1175,6 +1290,7 @@ const GUIDE_MAT = {
   grid: new THREE.LineBasicMaterial({ color: THEME.line, depthTest: false, transparent: true, opacity: 0.22 }),
   ring: new THREE.LineBasicMaterial({ color: THEME.accent, depthTest: false, transparent: true, opacity: 0.85 }),
   wall: new THREE.LineBasicMaterial({ color: THEME.select, depthTest: false, transparent: true, opacity: 0.95 }),
+  rail: new THREE.LineDashedMaterial({ color: THEME.accent, dashSize: 0.5, gapSize: 0.25, depthTest: false, transparent: true, opacity: 0.95 }),
 };
 
 const LINK_GEO = {

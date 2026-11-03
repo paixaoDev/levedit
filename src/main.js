@@ -283,8 +283,8 @@ class App {
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.hint;
     if (o.type === 'corridor') return 'Arraste os quadrados para mover nós · losango cria nó · bolinhas mudam a largura';
-    if (o.type === 'area' && o.shape === 'circle') return 'Arraste o quadrado do centro para mover · a bolinha muda o raio';
-    if (o.type === 'wall' || o.type === 'area') return 'Arraste os quadrados para mover nós · losango cria nó · botão direito remove';
+    if (o.type === 'area' && o.shape === 'circle') return 'Clique na linha tracejada para puxar uma parede · centro move · bolinha muda o raio';
+    if (o.type === 'wall' || o.type === 'area') return 'Clique na linha tracejada para puxar uma parede · quadrados movem nós · losango cria nó';
     return 'Arraste para mover · R gira · Ctrl+D duplica · Del exclui';
   }
 
@@ -300,8 +300,8 @@ class App {
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.touch;
     if (o.type === 'corridor') return 'Arraste nós e bolinhas · segure um nó para remover, ou o corredor para mover';
-    if (o.type === 'area' && o.shape === 'circle') return 'Arraste o centro para mover · a bolinha muda o raio';
-    if (o.type === 'wall' || o.type === 'area') return 'Arraste os nós · losango cria nó · segure um nó para remover, ou o objeto para mover';
+    if (o.type === 'area' && o.shape === 'circle') return 'Toque na linha tracejada para puxar uma parede · bolinha muda o raio';
+    if (o.type === 'wall' || o.type === 'area') return 'Toque na linha tracejada para puxar uma parede · arraste os nós';
     return 'Arraste para mover · 2 dedos movem a câmera';
   }
 
