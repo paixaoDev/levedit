@@ -35,6 +35,11 @@ body {
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
+  /* o documento nunca rola: no celular, mexer num campo do painel rolava a página
+     inteira e deixava a tela em branco. Só os painéis rolam por dentro. */
+  position: fixed;
+  inset: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+  height: auto;
 }
 button, input, select { font: inherit; color: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
