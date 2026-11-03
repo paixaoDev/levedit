@@ -1,7 +1,7 @@
 // Iluminação na interface: campos de teto (corredores/áreas), campos da luz
 // pontual e o menu "Luz" flutuante no canto da vista 3D.
 import { el, field } from './fields.js';
-import { LIGHT_PRESETS, ROOF_VIEWS, LIGHTING_DEFAULTS } from '../render/lighting.js';
+import { LIGHT_PRESETS, ROOF_VIEWS, LIGHTING_DEFAULTS, presetColors } from '../render/lighting.js';
 import { setByPath } from '../util.js';
 
 /** Campos do teto (F = construtor de campo do inspetor). */
@@ -43,6 +43,10 @@ const CSS = `
 .light-pop .field { margin: 0; grid-template-columns: 1fr; gap: 4px; }
 .light-pop .field .range { display: grid; grid-template-columns: 1fr 56px; gap: 6px; align-items: center; }
 .light-pop .field .range input[type=range] { width: 100%; }
+.light-pop .color-line { display: grid; grid-template-columns: 1fr 40px auto; gap: 6px; align-items: center; }
+.light-pop .color-line input[type=color] { width: 40px; height: 26px; padding: 0; border: 1px solid var(--line-mid, #d8cfbf); border-radius: 6px; background: none; cursor: pointer; }
+.light-pop .color-line .reset { font: inherit; font-size: 11px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--line-soft, #e7e0d3); background: #fff; cursor: pointer; color: var(--ink, #2f2a24); }
+.light-pop .color-line .reset:disabled { opacity: .4; cursor: default; }
 .light-pop .info { margin: 0; font-size: 11px; color: var(--muted, #8a7a62); line-height: 1.35; }
 body.playing .light-menu { display: none; }
 `;
@@ -92,11 +96,23 @@ export class LightingMenu {
       type: 'button', class: L.preset === k ? 'active' : '', onclick: () => this.set('preset', k),
     }, p.label)));
     const lit = L.preset !== 'editor';
+    const defs = presetColors(L.preset);
+    // cor da luz: seletor nativo + "padrão" volta à cor do preset
+    const colorRow = (key, label, def) => {
+      const id = `light-${key}`;
+      const input = el('input', { type: 'color', id, value: L[key] || def });
+      input.addEventListener('input', () => this.set(key, input.value, false));
+      input.addEventListener('change', () => this.set(key, input.value, true));
+      const reset = el('button', { type: 'button', class: 'reset', disabled: !L[key], onclick: () => { this.set(key, null); this.render(); } }, 'padrão');
+      return el('div', { class: 'color-line' }, el('label', { for: id }, label), input, reset);
+    };
     this.pop.replaceChildren(
       el('h4', {}, 'Iluminação'),
       presets,
       lit ? field(L, { key: 'sunAngle', label: 'Direção do sol', type: 'range', min: 0, max: 360, step: 5 }, onF) : null,
+      lit ? colorRow('sunColor', 'Cor da luz de fora (sol)', defs.sun) : null,
       lit ? field(L, { key: 'interior', label: 'Luz interna', type: 'range', min: 0, max: 2, step: 0.05 }, onF) : null,
+      lit ? colorRow('interiorColor', 'Cor da luz interna', defs.interior) : null,
       lit ? el('p', { class: 'info' }, 'A luz interna ilumina lugares com teto (e faz sombra) sem precisar colocar pontos de luz.') : el('p', { class: 'info' }, 'Escolha Dia, Entardecer ou Noite para ver sol, sombras, tetos e pontos de luz (L).'),
       el('h4', {}, 'Tetos no editor'),
       field(L, { key: 'roofView', label: 'Mostrar', type: 'select', options: ROOF_VIEWS }, onF),

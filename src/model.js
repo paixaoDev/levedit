@@ -10,8 +10,9 @@ export const PALETTE = [
 
 export const PROC_DEFAULTS = { seed: 1, gapChance: 0, gapLength: 2, heightVar: 0, jitter: 0, segment: 1 };
 
-// Iluminação do level (preset, ângulo do sol em graus, força da luz interna, exibição dos tetos).
-export const LIGHTING_DEFAULTS = { preset: 'editor', sunAngle: 35, interior: 0.8, roofView: 'dotted' };
+// Iluminação do level (preset, ângulo do sol em graus, força da luz interna, exibição dos tetos,
+// cores do sol e da luz interna; null = cor do preset).
+export const LIGHTING_DEFAULTS = { preset: 'editor', sunAngle: 35, interior: 0.8, roofView: 'dotted', sunColor: null, interiorColor: null };
 
 // Teto: sem teto o espaço recebe o sol; com teto fica só com a luz interna e as luzes pontuais.
 export const ROOF_DEFAULTS = { enabled: false, thickness: 0.2, color: '#f4f1ea' };

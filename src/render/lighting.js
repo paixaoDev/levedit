@@ -31,6 +31,15 @@ const P = {
   night: { bg: 0x1f2430, hemi: [0x5a6a8f, 0x2a2a33, 0.35], sun: [0x9fb4ff, 0.5, 48], fill: 0, shadows: true, interior: 0.6, points: true },
 };
 
+const INTERIOR_COLOR = 0xfff1dc;
+
+/** Cor padrão (hex) do sol e da luz interna no preset. */
+export function presetColors(preset) {
+  const p = P[preset] || P.editor;
+  const hex = (n) => `#${new THREE.Color(n).getHexString()}`;
+  return { sun: hex(p.sun[0]), interior: hex(INTERIOR_COLOR) };
+}
+
 export class LightRig {
   constructor(scene) {
     this.scene = scene;
@@ -64,10 +73,11 @@ export class LightRig {
     this.hemi.color.set(p.hemi[0]);
     this.hemi.groundColor.set(p.hemi[1]);
     this.hemi.intensity = p.hemi[2];
-    this.sun.color.set(p.sun[0]);
+    this.sun.color.set(s.sunColor || p.sun[0]);
     this.sun.intensity = p.sun[1];
     this.fill.intensity = p.fill;
     this.sun.castShadow = p.shadows;
+    this.interior.color.set(s.interiorColor || INTERIOR_COLOR);
     this.interior.intensity = p.interior * s.interior;
     this.interior.castShadow = p.shadows && this.interior.intensity > 0;
     this.interior.visible = this.interior.intensity > 0;
