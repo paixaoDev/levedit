@@ -6,10 +6,11 @@ import { setByPath } from '../util.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
+import { roofFields, lightFields } from './lighting.js';
 
-const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente' };
-const GROUP_ORDER = ['corridor', 'area', 'wall', 'connector', 'asset', 'agent'];
-const GROUP_LABEL = { corridor: 'Corredores', area: 'Áreas', wall: 'Paredes', connector: 'Escadas e rampas', asset: 'Assets', agent: 'Agentes' };
+const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente', light: 'Luz' };
+const GROUP_ORDER = ['corridor', 'area', 'wall', 'connector', 'asset', 'light', 'agent'];
+const GROUP_LABEL = { corridor: 'Corredores', area: 'Áreas', wall: 'Paredes', connector: 'Escadas e rampas', asset: 'Assets', light: 'Luzes', agent: 'Agentes' };
 
 const PARAM_LABELS = {
   speed: 'Velocidade', sprint: 'Mult. corrida', jump: 'Força do pulo', gravity: 'Gravidade', eyeHeight: 'Altura olhos',
@@ -197,6 +198,8 @@ export class Panels {
         }
       }
       box.append(pal);
+    } else if (t === 'light') {
+      box.append(...lightFields((f) => field(opt, f, onF), { placing: true }));
     }
     box.append(el('p', { class: 'info' }, TOOL_INFO[t].hint));
   }
@@ -291,6 +294,7 @@ export class Panels {
         F({ key: 'walls.capEnd', label: 'Fechar fim', type: 'bool' }),
         F({ key: 'walls.color', label: 'Cor', type: 'color' }),
       ]));
+      box.append(G('Teto e luz', roofFields(F)));
       box.append(G('Regras procedurais', procFields()));
       box.append(G('Decoração', decoFields({ both: 'Ambos', left: 'Esquerda', right: 'Direita' })));
     } else if (o.type === 'wall') {
@@ -327,6 +331,7 @@ export class Panels {
         F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.enabled }),
         F({ key: 'walls.color', label: 'Cor', type: 'color', show: (x) => x.walls.enabled }),
       ]));
+      box.append(G('Teto e luz', roofFields(F)));
       box.append(G('Regras procedurais', procFields()));
       box.append(G('Decoração', decoFields({ inside: 'Dentro', outside: 'Fora', both: 'Ambos' })));
     } else if (o.type === 'connector') {
@@ -359,6 +364,10 @@ export class Panels {
         F({ key: 'scale.y', label: 'Escala Y', type: 'range', min: 0.1, max: 10, step: 0.05 }),
         F({ key: 'scale.z', label: 'Escala Z', type: 'range', min: 0.1, max: 10, step: 0.05 }),
       ]));
+    } else if (o.type === 'light') {
+      box.append(actions);
+      box.append(G('Luz', lightFields(F)));
+      box.append(G('Transformação', this.transformFields(o, F).slice(0, 1)));
     } else if (o.type === 'agent') {
       box.append(actions);
       const modes = Object.fromEntries(Object.entries(AGENT_MODES[o.role]).map(([k, v]) => [k, v.label]));
@@ -478,11 +487,11 @@ export class Panels {
     const o = this.store.get(id);
     if (!o) return;
     // estilo compartilhado no grupo
-    const shared = /^(walls|floor|proc|deco)\./.test(key) || key === 'smooth';
+    const shared = /^(walls|floor|proc|deco|roof)\./.test(key) || key === 'smooth';
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {

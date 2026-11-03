@@ -6,6 +6,7 @@ import { Store } from './store.js';
 import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
+import { LightingMenu } from './ui/lighting.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
 import { customModels } from './builders/assets.js';
@@ -22,6 +23,7 @@ const TOOL_ICONS = {
   connector: 'M4 20h4v-4h4v-4h4V8h4',
   asset: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5',
   agent: 'M12 3a3 3 0 1 0 0.01 0z M7 21v-6a5 5 0 0 1 10 0v6',
+  light: 'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z',
 };
 
 class App {
@@ -33,6 +35,7 @@ class App {
     this.vp.initControls();
     this.play = new PlayMode(this.vp, this.store);
     this.panels = new Panels(this);
+    this.lightMenu = new LightingMenu(this);
     this.buildToolbar();
     this.bindUi();
     this.bindStore();

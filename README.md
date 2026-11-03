@@ -57,6 +57,14 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - **Importar GLB/GLTF**: o modelo entra no mesmo material do editor e só muda de cor.
 - Todos os objetos usam o mesmo material; só a cor muda.
 
+**Iluminação (botão Luz, no canto da vista)**
+- Presets **Editor (plano)**, **Dia**, **Entardecer** e **Noite**, com sol que faz sombra e direção ajustável.
+- Corredores e áreas têm **Teto** (com/sem). Sem teto recebe o sol; com teto fica na sombra dele.
+- **Luz interna**: ilumina os espaços com teto e faz sombra (paredes, objetos, agentes) sem precisar de pontos de luz.
+- **Luz (L)**: pontos de luz com cor, intensidade, alcance, altura e sombra, para testar o mapa.
+- No editor o teto aparece pontilhado (ou sólido/oculto); no modo jogo em FPS ele é sólido.
+- Outros níveis em modo "transparentes" aparecem em pontinhos, sem somar camadas quando se sobrepõem.
+
 **Agentes e modo de teste (▶ Testar)**
 - Player com 3 gameplays customizáveis: **FPS** (mouse travado, tiro hitscan), **Plataforma** (terceira pessoa,
   pulo duplo, pisão nos inimigos) e **Carro** (arcade com drift e freio de mão).
@@ -79,6 +87,7 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 | S | Escada/rampa | Del | Excluir |
 | O | Asset | Ctrl+D | Duplicar |
 | P | Agente | Ctrl+Z / Ctrl+Shift+Z | Desfazer / refazer |
+| L | Luz | | |
 | PgUp/PgDn | Trocar nível | Ctrl+Enter | Testar |
 | Shift+clique | Somar à seleção | Ctrl+G / Ctrl+Shift+G | Agrupar / desagrupar |
 
@@ -90,7 +99,7 @@ Câmera: arraste no vazio (ou botão direito) para girar, botão do meio ou Shif
 index.html, style.css      interface
 src/math/curve.js          curvas, amostragem por arco, frames com miter, offsets (sem Three.js, testável)
 src/builders/              geração procedural: corredores, paredes, áreas, decoração, conectores, assets, agentes
-src/render/                material único + contorno CAD, geometrias (faixas, lajes)
+src/render/                material único + contorno CAD, pontilhado, geometrias (faixas, lajes), iluminação
 src/editor/                viewport, câmeras, grid e ferramentas
 src/play/                  física por raycast, player e inimigos
 src/ui/                    painéis de níveis, objetos e propriedades
