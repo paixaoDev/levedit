@@ -10,6 +10,13 @@ export const PALETTE = [
 
 export const PROC_DEFAULTS = { seed: 1, gapChance: 0, gapLength: 2, heightVar: 0, jitter: 0, segment: 1 };
 
+// Iluminação do level (preset, ângulo do sol em graus, força da luz interna, exibição dos tetos,
+// cores do sol e da luz interna; null = cor do preset).
+export const LIGHTING_DEFAULTS = { preset: 'editor', sunAngle: 35, interior: 0.8, roofView: 'dotted', sunColor: null, interiorColor: null };
+
+// Teto: sem teto o espaço recebe o sol; com teto fica só com a luz interna e as luzes pontuais.
+export const ROOF_DEFAULTS = { enabled: false, thickness: 0.2, color: '#f4f1ea' };
+
 export const DECO_TYPES = {
   none: 'Nenhuma',
   flowers: 'Canteiro de flores',
@@ -36,6 +43,7 @@ export const TYPE_DEFAULTS = {
     stepHeight: 0.25,
     floor: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
     walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: false },
+    roof: ROOF_DEFAULTS,
     proc: PROC_DEFAULTS,
     deco: { type: 'none', side: 'both', density: 0.4, color: '#9bb57a', inset: 0.7, seed: 7 },
   },
@@ -59,6 +67,7 @@ export const TYPE_DEFAULTS = {
     walls: { enabled: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous' },
     joins: { areas: 'door' },
     doorWidth: 1.6,
+    roof: ROOF_DEFAULTS,
     proc: PROC_DEFAULTS,
     deco: { type: 'none', side: 'inside', density: 0.4, color: '#9bb57a', inset: 0.7, seed: 7 },
   },
@@ -82,6 +91,14 @@ export const TYPE_DEFAULTS = {
     color: '#e9e2d4',
     customId: null,
     collider: true,
+  },
+  light: {
+    name: 'Luz',
+    x: 0, z: 0, y: 2.4, rotY: 0,
+    color: '#ffd9a0',
+    intensity: 8,
+    range: 14,
+    shadows: true,
   },
   agent: {
     name: 'Agente',
@@ -165,7 +182,7 @@ export function emptyDoc() {
   return {
     version: DOC_VERSION,
     name: 'Novo level',
-    settings: { gridSize: 1, snap: true, otherLevels: 'ghost', solidGround: true },
+    settings: { gridSize: 1, snap: true, otherLevels: 'ghost', solidGround: true, lighting: { ...LIGHTING_DEFAULTS } },
     levels: [l0],
     activeLevelId: l0.id,
     objects: [],
@@ -185,6 +202,7 @@ export function normalizeDoc(doc) {
 export function sampleDoc() {
   const doc = emptyDoc();
   doc.name = 'Exemplo';
+  doc.settings.lighting.preset = 'day';
   const l0 = doc.levels[0];
   const l1 = makeLevel('Nível 1', 4);
   doc.levels.push(l1);
@@ -215,7 +233,10 @@ export function sampleDoc() {
     walls: { left: true, right: true, height: 3, thickness: 0.3, color: '#ffffff', mode: 'continuous', capStart: false, capEnd: true },
     joins: { start: 'door', end: 'door' },
     links: { start: { id: 'cor_sample_alto', jid: 'jsaida' }, end: null },
+    roof: { enabled: true, thickness: 0.2, color: '#f4f1ea' },
   }));
+  objs.push(makeObject('light', { name: 'Luz do túnel', levelId: l1.id, x: 32, z: 25, y: 2.3, color: '#ffd9a0', intensity: 6, range: 12 }));
+  objs.push(makeObject('light', { name: 'Luz da praça', levelId: l0.id, x: -3, z: -6, y: 3, color: '#ffe2b0', intensity: 14, range: 16 }));
   objs.push(makeObject('area', {
     name: 'Mezanino', levelId: l1.id,
     points: [{ x: -14, z: 8 }, { x: -4, z: 8 }, { x: -4, z: 32 }, { x: -14, z: 32 }],

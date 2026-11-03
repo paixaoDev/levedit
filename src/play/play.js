@@ -60,6 +60,13 @@ export class PlayMode {
       this.toast('Nenhum player no level: usando FPS padrão. Adicione um agente player.');
     }
     this.player = this.makePlayer(normalizeObject(JSON.parse(JSON.stringify(pdata))));
+    // primeira pessoa: teto sólido; câmeras de fora continuam vendo através dele
+    this.vp.playRoofView = pdata.mode === 'fps' ? 'solid' : 'dotted';
+    this.vp.applyLighting();
+    for (const g of this.vp.objects.values()) {
+      applyVisualState(g, 'normal');
+      g.traverse((m) => { if (m.userData.editorOnly) m.visible = false; });
+    }
     this.enemies = agents.filter((a) => a.role === 'enemy').map((a) => this.makeEnemy(normalizeObject(JSON.parse(JSON.stringify(a)))));
     this.projectiles = [];
     this.effects = [];

@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { samplePath, computeFrames, offsetPoints, signedArea, untangle } from '../math/curve.js';
 import { floorGeometry, slabGeometry, wallGeometry, boxBetween, ribbon, sharedGeometry } from '../render/geometry.js';
-import { makeMesh } from '../render/materials.js';
+import { makeMesh, makeRoofMesh } from '../render/materials.js';
+import { makePointLight } from '../render/lighting.js';
 import { buildWallLine } from './walls.js';
 import { buildAssetParts, carParts } from './assets.js';
 import { corridorSamples, computeJunctions, halfAt, areaOutline, wrapCut } from './corridorPath.js';
@@ -35,6 +36,7 @@ export function buildObject(obj, ctx) {
     case 'connector': g = buildConnector(obj, ctx); break;
     case 'asset': g = buildAsset(obj, ctx); break;
     case 'agent': g = buildAgent(obj, ctx); break;
+    case 'light': g = buildLight(obj, ctx); break;
     default: g = new THREE.Group();
   }
   g.userData.objId = obj.id;
@@ -180,6 +182,15 @@ function buildCorridor(o, ctx) {
     if (W.capEnd && !J.trims.end && !joints.end) group.add(capW(samples.length - 1));
   }
 
+  if (o.roof?.enabled) {
+    // teto apoiado no topo das paredes, cobrindo até a face externa delas
+    const R = o.roof;
+    const topY = (p) => (stepped ? stepped.y0 + (stepped.rise * p.s) / (L || 1) : p.y ?? 0) + W.height + R.thickness;
+    const out = (side) => untangle(offsetPoints(samples, frames, (i) => side * (halfS(samples[i], side, frames[i]) + W.thickness)), { keepLength: true, ref: samples })
+      .map((p, i) => ({ ...p, y: topY(samples[i]) }));
+    group.add(makeRoofMesh(floorGeometry(out(1), out(-1), R.thickness, { closed }), R.color));
+  }
+
   const decoSides = o.deco.side === 'left' ? [1] : o.deco.side === 'right' ? [-1] : [1, -1];
   buildDecorations(group, samples, frames, o.deco, {
     closed, wallHeight: W.height, wallThickness: W.thickness, wallColor: W.color,
@@ -228,6 +239,10 @@ function buildArea(o, ctx) {
       const [w] = wrapCut({ s0: c.s0, s1: c.s0 + (c.s1 - c.s0) }, ol.total);
       buildDoorFrame(group, ring, w.s0, w.s0 + (c.s1 - c.s0), c, o.walls);
     }
+  }
+  if (o.roof?.enabled) {
+    const R = o.roof;
+    group.add(makeRoofMesh(slabGeometry(s, y + o.walls.height + R.thickness, R.thickness), R.color));
   }
   const side = o.deco.side;
   const th = o.walls.enabled ? o.walls.thickness : 0;
@@ -422,6 +437,43 @@ function buildAsset(o, ctx) {
   return group;
 }
 
+// ---------------------------------------------------------------- luzes
+
+function buildLight(o, ctx) {
+  const group = new THREE.Group();
+  const y0 = ctx.levelY(o.levelId);
+  const h = Math.max(0.2, o.y ?? 2.4);
+  const light = makePointLight(o);
+  light.position.y = h;
+  group.add(light);
+  // lâmpada (visível no jogo também), sem sombra para não tapar a própria luz
+  const bulb = new THREE.Mesh(
+    sharedGeometry('light-bulb', () => new THREE.IcosahedronGeometry(0.22, 1)),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(o.color).lerp(new THREE.Color('#ffffff'), 0.35) }),
+  );
+  bulb.position.y = h;
+  bulb.userData.collider = false;
+  bulb.userData.lightBulb = true;
+  group.add(bulb);
+  // marcadores do editor: haste até o chão e alcance tracejado
+  const helperMat = new THREE.LineDashedMaterial({ color: o.color, dashSize: 0.35, gapSize: 0.25, transparent: true, opacity: 0.9 });
+  const stem = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.02, 0), new THREE.Vector3(0, h, 0)]), helperMat);
+  stem.computeLineDistances();
+  const ring = [];
+  const r = Math.min(o.range, 40) * 0.5;
+  for (let i = 0; i <= 64; i++) { const a = (i / 64) * Math.PI * 2; ring.push(new THREE.Vector3(Math.cos(a) * r, 0.03, Math.sin(a) * r)); }
+  const circle = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ring), helperMat);
+  circle.computeLineDistances();
+  for (const l of [stem, circle]) { l.userData.editorOnly = true; l.raycast = () => {}; group.add(l); }
+  const base = makeMesh(sharedGeometry('light-base', () => new THREE.CylinderGeometry(0.28, 0.32, 0.06, 16)), '#5b5144', { collider: false, shadow: false });
+  base.position.y = 0.03;
+  base.userData.editorOnly = true;
+  group.add(base);
+  group.position.set(o.x, y0, o.z);
+  group.traverse((m) => { m.userData.collider = false; });
+  return group;
+}
+
 // ---------------------------------------------------------------- agentes
 
 /** Corpo visual de um agente (usado no editor e no modo jogo). */
@@ -478,6 +530,7 @@ function buildAgent(o, ctx) {
   const arrow = makeMesh(arrowGeo, o.role === 'player' ? '#4a6a8f' : '#c0632f', { collider: false });
   arrow.position.set(0, 0.04, 1.1);
   arrow.userData.editorOnly = true;
+  ring.castShadow = arrow.castShadow = false;
   group.add(ring, arrow);
   group.position.set(o.x, ctx.levelY(o.levelId), o.z);
   group.rotation.y = o.rotY;

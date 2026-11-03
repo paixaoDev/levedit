@@ -6,6 +6,7 @@ import { Store } from './store.js';
 import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
+import { LightingMenu } from './ui/lighting.js';
 import { TOOL_ICONS } from './ui/icons.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc, sampleDoc } from './model.js';
@@ -30,6 +31,7 @@ class App {
     this.vp.initControls();
     this.play = new PlayMode(this.vp, this.store);
     this.panels = new Panels(this);
+    this.lightMenu = new LightingMenu(this);
     this.buildToolbar();
     this.bindTips();
     this.bindUi();
@@ -45,7 +47,7 @@ class App {
   // ------------------------------------------------------------ UI
   buildToolbar() {
     const bar = document.getElementById('toolbar');
-    const groups = [['select'], ['corridor', 'area', 'wall'], ['connector', 'asset', 'agent']];
+    const groups = [['select'], ['corridor', 'area', 'wall'], ['connector', 'asset', 'light', 'agent']];
     for (const g of groups) {
       const box = document.createElement('div');
       box.className = 'dock-group';

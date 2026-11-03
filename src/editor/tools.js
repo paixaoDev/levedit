@@ -9,7 +9,7 @@ import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 
 const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
-const MOVABLE = new Set(['asset', 'agent', 'connector']);
+const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
 
 export const TOOL_INFO = {
   select: { label: 'Selecionar', key: 'V', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
@@ -19,6 +19,7 @@ export const TOOL_INFO = {
   connector: { label: 'Escada/Rampa', key: 'S', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
   asset: { label: 'Asset', key: 'O', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
   agent: { label: 'Agente', key: 'P', hint: 'Escolha player ou inimigo no painel e clique para colocar' },
+  light: { label: 'Luz', key: 'L', hint: 'Clique para colocar um ponto de luz · aparece com a luz Dia, Entardecer ou Noite' },
 };
 
 export class Tools extends EventTarget {
@@ -34,6 +35,7 @@ export class Tools extends EventTarget {
       asset: { kind: 'cube', color: '#e9e2d4' },
       agent: { role: 'player', mode: 'fps' },
       connector: { style: 'stairs' },
+      light: { color: '#ffd9a0', intensity: 8, range: 14, y: 2.4 },
     };
     this.draft = null;
     this.drag = null;
@@ -137,7 +139,7 @@ export class Tools extends EventTarget {
       if (hit) {
         this.store.select(hit.id);
         const o = this.store.get(hit.id);
-        const y = o.type === 'agent' || o.type === 'asset' ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
+        const y = o.type === 'agent' || o.type === 'asset' || o.type === 'light' ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
         const start = this.vp.groundPoint(ndc, y);
         if (start) {
           this._setControls(false);
@@ -635,6 +637,9 @@ export class Tools extends EventTarget {
         color: isPlayer ? '#4a6a8f' : opt.mode === 'arcade' ? '#b56b7a' : '#c0632f',
         behavior: isPlayer ? 'idle' : opt.mode === 'car' ? 'chase' : 'wander',
       });
+    }
+    if (t === 'light') {
+      return makeObject('light', { name: `Luz ${count}`, levelId, x: p.x, z: p.z, color: opt.color, intensity: opt.intensity, range: opt.range, y: opt.y });
     }
     if (t === 'connector') {
       const lv = [...this.store.doc.levels].sort((a, b) => a.elevation - b.elevation);

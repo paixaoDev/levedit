@@ -2,7 +2,8 @@
 // sincronização documento → cena e utilidades de picking.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { THEME, applyVisualState } from '../render/materials.js';
+import { THEME, STIPPLE, applyVisualState, setRoofView } from '../render/materials.js';
+import { LightRig, installRoofShadowPass } from '../render/lighting.js';
 import { buildObject, makeContext } from '../builders/index.js';
 
 export class Viewport {
@@ -12,6 +13,10 @@ export class Viewport {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // sombras sempre habilitadas no renderer; cada luz liga/desliga a sua
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    STIPPLE.value = this.renderer.getPixelRatio();
     container.appendChild(this.renderer.domElement);
     this.dom = this.renderer.domElement;
     this.dom.tabIndex = 0;
@@ -20,12 +25,9 @@ export class Viewport {
     this.scene.background = new THREE.Color(THEME.background);
     this.scene.fog = new THREE.Fog(THEME.background, 140, 320);
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xd9cfbd, 1.35);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
-    sun.position.set(30, 60, 18);
-    const fill = new THREE.DirectionalLight(0xfff3e0, 0.45);
-    fill.position.set(-40, 25, -30);
-    this.scene.add(hemi, sun, fill);
+    this.lights = new LightRig(this.scene);
+    this.roofs = [];
+    installRoofShadowPass(this.renderer, () => this.roofs);
 
     this.root = new THREE.Group();
     this.root.name = 'level';
@@ -104,6 +106,7 @@ export class Viewport {
   resize() {
     const w = this.container.clientWidth || 1, h = this.container.clientHeight || 1;
     this.renderer.setSize(w, h, false);
+    STIPPLE.value = this.renderer.getPixelRatio();
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
     const s = 30;
@@ -171,7 +174,23 @@ export class Viewport {
       }
     }
     this.updateGrid();
+    this.roofs = [];
+    this.root.traverse((m) => { if (m.userData.roof) this.roofs.push(m); });
+    this.applyLighting();
     this.updateVisualStates();
+  }
+
+  /** Preset de luz, exibição dos tetos e enquadramento das sombras. */
+  applyLighting() {
+    const L = this.store.doc.settings.lighting || {};
+    this.lights.apply(L);
+    const box = new THREE.Box3();
+    for (const g of this.objects.values()) if (g.visible !== false) box.expandByObject(g);
+    this.lights.fit(box);
+    // no jogo em primeira pessoa o teto é sólido; no editor segue a escolha
+    setRoofView(this.playing ? (this.playRoofView || 'solid') : (L.roofView || 'dotted'));
+    const night = L.preset === 'night';
+    for (const l of this.gridGroup.children) l.material.opacity = (l.userData.baseOpacity ??= l.material.opacity) * (night ? 0.35 : 1);
   }
 
   _add(o) {
@@ -191,6 +210,9 @@ export class Viewport {
         m.geometry.dispose();
         for (const c of m.children) if (c.isLineSegments && c.userData.isEdge) c.geometry.dispose();
       }
+      if (m.isLine && !m.isLineSegments) { m.geometry.dispose(); m.material.dispose(); }
+      if (m.userData.lightBulb) m.material.dispose();
+      if (m.isLight) m.dispose();
     });
   }
 
@@ -208,7 +230,11 @@ export class Viewport {
       g.visible = levelVisible && !(other && mode === 'hide');
       const state = this.store.isSelected(id) ? 'selected' : other && mode === 'ghost' ? 'ghost' : 'normal';
       applyVisualState(g, state);
-      g.traverse((m) => { if (m.userData.editorOnly) m.visible = !this.playing; });
+      const lit = this.lights.lit;
+      g.traverse((m) => {
+        if (m.userData.editorOnly) m.visible = !this.playing;
+        if (m.userData.pointLight) m.visible = lit && g.visible;
+      });
     }
   }
 
