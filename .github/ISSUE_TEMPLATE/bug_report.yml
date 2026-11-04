@@ -1,0 +1,74 @@
+name: Bug
+description: Algo não funciona como deveria.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por reportar! Antes de enviar, procure nas issues abertas se o problema já foi reportado.
+  - type: textarea
+    id: descricao
+    attributes:
+      label: O que aconteceu
+      description: Descreva o problema em poucas frases.
+    validations:
+      required: true
+  - type: textarea
+    id: passos
+    attributes:
+      label: Passos para reproduzir
+      placeholder: |
+        1. Criar um corredor com a ferramenta C
+        2. Girar 90° com R
+        3. A parede da esquerda some
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: O que você esperava
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Parte do editor
+      options:
+        - Corredores / paredes / áreas
+        - Junções e portas
+        - Níveis, escadas e rampas
+        - Assets e importação GLB/GLTF
+        - Iluminação
+        - Modo de teste (agentes e física)
+        - Arquivo (salvar, abrir, exportar)
+        - Interface / touch
+        - Outra
+    validations:
+      required: true
+  - type: input
+    id: navegador
+    attributes:
+      label: Navegador e sistema
+      placeholder: Chrome 130 no Windows 11, Safari no iPhone 15...
+    validations:
+      required: true
+  - type: textarea
+    id: anexos
+    attributes:
+      label: Prints, vídeo ou level
+      description: Arraste aqui um print, vídeo ou o `.level.json` (Arquivo → Salvar) que reproduz o problema.
+  - type: textarea
+    id: console
+    attributes:
+      label: Erros no console
+      description: Se houver, cole os erros do console do navegador (F12).
+      render: text
+  - type: checkboxes
+    id: confirmacoes
+    attributes:
+      label: Confirmações
+      options:
+        - label: Procurei nas issues e não achei uma igual.
+          required: true
+        - label: Testei na versão publicada mais recente.

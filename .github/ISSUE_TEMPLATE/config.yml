@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reportar falha de segurança
+    url: https://github.com/paixaoDev/levedit/security/advisories/new
+    about: Falhas de segurança são reportadas em privado, não em issue pública.
+  - name: Abrir o editor
+    url: https://paixaodev.github.io/levedit/
+    about: Versão publicada do levedit.

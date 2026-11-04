@@ -1,0 +1,15 @@
+name: Pergunta
+description: Dúvida sobre como usar o editor ou o formato do level.
+labels: ["question"]
+body:
+  - type: textarea
+    id: pergunta
+    attributes:
+      label: Sua pergunta
+    validations:
+      required: true
+  - type: textarea
+    id: contexto
+    attributes:
+      label: Contexto
+      description: O que você já tentou, prints ou o `.level.json`.
