@@ -95,4 +95,4 @@ Exemplos: `feat(areas): área circular com centro e raio`, `fix(walls): parede n
 
 ## Licença
 
-Ao contribuir, você concorda que seu código será distribuído sob a [licença MIT](LICENSE) do projeto.
+Ao contribuir, você concorda que seu código será distribuído sob a [GNU GPL v3](LICENSE), a licença do projeto.

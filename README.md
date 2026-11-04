@@ -1,7 +1,7 @@
 # levedit
 
 [![CI](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml/badge.svg)](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml)
-[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue.svg)](LICENSE)
+[![Licença: GPL v3](https://img.shields.io/badge/licen%C3%A7a-GPL%20v3-blue.svg)](LICENSE)
 [![PRs bem-vindas](https://img.shields.io/badge/PRs-bem--vindas-brightgreen.svg)](CONTRIBUTING.md)
 
 **▶ Abrir o editor: https://paixaodev.github.io/levedit/**
@@ -123,5 +123,6 @@ Falhas de segurança são reportadas em privado, conforme o [SECURITY.md](SECURI
 
 ## Licença
 
-[MIT](LICENSE) © Carlos Paixão. O Three.js em `vendor/` é distribuído sob a própria licença MIT
-([vendor/THREE-LICENSE](vendor/THREE-LICENSE)).
+Copyright © 2026 Carlos Paixão e contribuidores. Distribuído sob a [GNU GPL v3](LICENSE): você pode usar, estudar,
+modificar e redistribuir, mas versões modificadas que forem distribuídas também precisam ser GPL v3 com o código aberto.
+O Three.js em `vendor/` mantém a própria licença MIT ([vendor/THREE-LICENSE](vendor/THREE-LICENSE)).
