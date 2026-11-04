@@ -1,5 +1,9 @@
 # levedit
 
+[![CI](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml/badge.svg)](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml)
+[![Licença: GPL v3](https://img.shields.io/badge/licen%C3%A7a-GPL%20v3-blue.svg)](LICENSE)
+[![PRs bem-vindas](https://img.shields.io/badge/PRs-bem--vindas-brightgreen.svg)](CONTRIBUTING.md)
+
 **▶ Abrir o editor: https://paixaodev.github.io/levedit/**
 
 Editor de levels 3D para a web, feito com [Three.js](https://threejs.org). Serve para criar e testar
@@ -110,3 +114,15 @@ tests/                     testes da matemática de curvas (node --test tests/*.
 ```
 
 O formato do level é JSON simples (`levels`, `objects`, `settings`, `customAssets`), fácil de ler em qualquer engine.
+
+## Contribuindo
+
+Contribuições são bem-vindas! Leia o [guia de contribuição](CONTRIBUTING.md) para saber como abrir issues,
+rodar o projeto e mandar pull requests. Ao participar, siga o [Código de Conduta](CODE_OF_CONDUCT.md).
+Falhas de segurança são reportadas em privado, conforme o [SECURITY.md](SECURITY.md).
+
+## Licença
+
+Copyright © 2026 Carlos Paixão e contribuidores. Distribuído sob a [GNU GPL v3](LICENSE): você pode usar, estudar,
+modificar e redistribuir, mas versões modificadas que forem distribuídas também precisam ser GPL v3 com o código aberto.
+O Three.js em `vendor/` mantém a própria licença MIT ([vendor/THREE-LICENSE](vendor/THREE-LICENSE)).

@@ -1,0 +1,34 @@
+name: Sugestão de funcionalidade
+description: Proponha uma ideia nova ou melhoria.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qual problema isso resolve
+      description: Conte o que você está tentando fazer no editor e o que atrapalha hoje.
+    validations:
+      required: true
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Proposta
+      description: Como você imagina que funcione? Ferramenta, atalho, painel...
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas que você considerou
+  - type: textarea
+    id: referencias
+    attributes:
+      label: Referências
+      description: Prints, esboços ou outros editores que fazem algo parecido.
+  - type: checkboxes
+    id: contribuir
+    attributes:
+      label: Contribuição
+      options:
+        - label: Quero implementar isso eu mesmo(a).
