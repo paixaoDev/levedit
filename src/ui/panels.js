@@ -3,6 +3,7 @@ import { el, field, group } from './fields.js';
 import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject } from '../model.js';
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
+import { LEDGE_SIDES, LEDGE_DEFAULTS, objectLevelIds, assetHeight, suggestLedgeHeight } from '../levels.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
@@ -78,7 +79,7 @@ export class Panels {
     this.$levels.innerHTML = '';
     const sorted = [...doc.levels].sort((a, b) => b.elevation - a.elevation);
     for (const l of sorted) {
-      const count = doc.objects.filter((o) => o.levelId === l.id).length;
+      const count = doc.objects.filter((o) => objectLevelIds(o, doc).has(l.id)).length;
       const active = doc.activeLevelId === l.id;
       const eye = el('button', {
         class: `eye ${l.visible ? '' : 'off'}`, type: 'button', 'data-tip': l.visible ? 'Ocultar andar' : 'Mostrar andar', 'aria-label': l.visible ? 'Ocultar andar' : 'Mostrar andar',
@@ -112,6 +113,7 @@ export class Panels {
       d.levels = d.levels.filter((x) => x.id !== l.id);
       d.objects = d.objects.filter((o) => o.levelId !== l.id);
       for (const o of d.objects) {
+        if (o.topLevelId === l.id) { o.topLevelId = null; o.topOffset = 0; }
         if (o.endLevelId === l.id) o.endLevelId = null;
         if (o.toLevelId === l.id) o.toLevelId = o.levelId;
         if (o.fromLevelId === l.id) o.fromLevelId = o.levelId;
@@ -138,7 +140,7 @@ export class Panels {
       for (const o of items) {
         const color = o.color || o.walls?.color || o.floor?.color || '#fff';
         const li = el('li', {
-          class: `item ${this.store.isSelected(o.id) ? 'selected' : ''} ${o.levelId !== doc.activeLevelId ? 'dim' : ''}`,
+          class: `item ${this.store.isSelected(o.id) ? 'selected' : ''} ${objectLevelIds(o, doc).has(doc.activeLevelId) ? '' : 'dim'}`,
           title: o.name,
           onclick: (e) => { this.store.select(o.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }); },
           ondblclick: () => this.app.focusSelection(),
@@ -403,11 +405,13 @@ export class Panels {
         F({ key: 'color', label: 'Cor', type: 'color' }),
         F({ key: 'collider', label: 'Colisão', type: 'bool' }),
       ]));
+      box.append(G('Andares', this.spanFields(o, F)));
+      box.append(G('Plataformas', this.ledgeFields(o, F)));
       box.append(G('Transformação', [
         ...this.transformFields(o, F),
-        F({ key: 'y', label: 'Altura (Y)', type: 'number', step: 0.1 }),
+        F({ key: 'y', label: 'Altura da base (Y)', type: 'number', step: 0.1 }),
         F({ key: 'scale.x', label: 'Escala X', type: 'range', min: 0.1, max: 10, step: 0.05 }),
-        F({ key: 'scale.y', label: 'Escala Y', type: 'range', min: 0.1, max: 10, step: 0.05 }),
+        F({ key: 'scale.y', label: 'Escala Y', type: 'range', min: 0.1, max: 10, step: 0.05, show: (x) => !x.topLevelId }),
         F({ key: 'scale.z', label: 'Escala Z', type: 'range', min: 0.1, max: 10, step: 0.05 }),
       ]));
     } else if (o.type === 'light') {
@@ -557,6 +561,64 @@ export class Panels {
     this.renderProps();
   }
 
+  /** Asset que atravessa andares: andar do topo + ajuste. */
+  spanFields(o, F) {
+    const doc = this.store.doc;
+    const baseY = this.app.vp.ctx.levelY(o.levelId) + (o.y || 0);
+    const above = Object.fromEntries(doc.levels.filter((l) => l.elevation > baseY + 1e-3)
+      .sort((a, b) => a.elevation - b.elevation).map((l) => [l.id, `${l.name} (${l.elevation} m)`]));
+    const h = this.assetHeightOf(o);
+    const n = objectLevelIds(o, doc).size;
+    return [
+      F({ key: 'topLevelId', label: 'Vai até o andar', type: 'select', options: { '': '— só este andar —', ...above }, tip: 'O topo encaixa na altura do andar escolhido e acompanha se ele mudar' }),
+      F({ key: 'topOffset', label: 'Ajuste no topo (m)', type: 'number', step: 0.25, show: (x) => !!x.topLevelId }),
+      el('p', { class: 'info' }, o.topLevelId
+        ? `Altura ${h.toFixed(2)} m · aparece em ${n} andares. Arraste a alça do topo para trocar de andar (Alt solta o ímã).`
+        : 'Arraste a alça do topo para cima: ela encaixa na altura de cada andar (Alt solta o ímã).'),
+    ];
+  }
+
+  /** Plataformas presas ao bloco, em qualquer altura entre os andares. */
+  ledgeFields(o, F) {
+    const h = this.assetHeightOf(o);
+    const out = [];
+    (o.ledges || []).forEach((l, i) => {
+      out.push(el('div', { class: 'ledge-head' }, el('span', {}, `Plataforma ${i + 1}`),
+        el('button', { class: 'btn ghost small', type: 'button', onclick: () => this.removeLedge(o.id, i) }, 'Remover')));
+      out.push(
+        F({ key: `ledges.${i}.h`, label: 'Altura (m)', type: 'range', min: 0, max: Math.max(0.5, +h.toFixed(2)), step: 0.05, tip: 'Altura do piso da plataforma a partir da base' }),
+        F({ key: `ledges.${i}.side`, label: 'Lado', type: 'select', options: LEDGE_SIDES }),
+        F({ key: `ledges.${i}.depth`, label: 'Profundidade', type: 'range', min: 0.2, max: 6, step: 0.1 }),
+        F({ key: `ledges.${i}.width`, label: 'Largura (%)', type: 'range', min: 0.1, max: 1, step: 0.05, show: (x) => x.ledges[i]?.side !== 'all' }),
+        F({ key: `ledges.${i}.thickness`, label: 'Espessura', type: 'range', min: 0.05, max: 1, step: 0.05 }),
+      );
+    });
+    out.push(el('div', { class: 'props-actions' },
+      el('button', { class: 'btn small', type: 'button', onclick: () => this.addLedge(o.id), 'data-tip': 'Plataforma onde o player anda e pula, entre os andares' }, '+ Plataforma')));
+    return out;
+  }
+
+  assetHeightOf(o) {
+    return this.app.vp.objects.get(o.id)?.userData.height ?? assetHeight(o, this.app.vp.ctx.levelY);
+  }
+
+  addLedge(id) {
+    this.store.mutate((d) => {
+      const o = d.objects.find((x) => x.id === id);
+      if (!o) return;
+      o.ledges = [...(o.ledges || []), { ...LEDGE_DEFAULTS, h: suggestLedgeHeight(o, d) }];
+    }, { ids: [id], structure: true });
+    this.renderProps();
+  }
+
+  removeLedge(id, index) {
+    this.store.mutate((d) => {
+      const o = d.objects.find((x) => x.id === id);
+      if (o?.ledges) o.ledges.splice(index, 1);
+    }, { ids: [id], structure: true });
+    this.renderProps();
+  }
+
   /** ids do grupo de um objeto (ou só ele). */
   groupIds(id) {
     const o = this.store.get(id);
@@ -572,7 +634,7 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key) || /^ledges\.\d+\.side$/.test(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {
@@ -581,6 +643,7 @@ export class Panels {
         setByPath(t, key, value);
         if (t.points && /^(width|smooth|walls\.)/.test(key)) markEdited(d, t);
         if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
+        if (key === 'topLevelId' && !value) t.topOffset = 0;
         if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
       }
     }, { ids: targets, record, structure: (structural || key === 'groupId' || key.startsWith('joins')) && final });

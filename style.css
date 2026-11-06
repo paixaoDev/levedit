@@ -676,3 +676,7 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
   body.touch .tool-btn { width: 40px; height: 40px; }
   .panel.left, .panel.right { height: 58dvh; }
 }
+
+/* plataformas de um asset que atravessa andares */
+.ledge-head { display: flex; align-items: center; justify-content: space-between; margin: 10px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted, #8a7a62); }
+.ledge-head:first-of-type { margin-top: 4px; }

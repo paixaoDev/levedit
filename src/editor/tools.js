@@ -8,6 +8,7 @@ import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs,
 import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, attachParam, wallLines, nearestWall, onLine } from './polar.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
+import { snapTopToLevels } from '../levels.js';
 
 const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
@@ -138,6 +139,13 @@ export class Tools extends EventTarget {
           this.drag = { kind: 'edge', id: h.id, index: h.index, side: h.side, y: h.pos.y, both: e.shiftKey, recorded: false };
           return;
         }
+        if (h.kind === 'top') {
+          // topo do asset: extruda para cima/baixo encaixando nos andares
+          const g = this.vp.objects.get(h.id);
+          const base = this.vp.ctx.levelY(o.levelId) + (o.y || 0);
+          this.drag = { kind: 'top', id: h.id, base, unitH: g?.userData.unitHeight ?? 1, pos: h.pos, sy: e.clientY, top: h.pos.y, recorded: false };
+          return;
+        }
         if (h.kind === 'radius') {
           this.drag = { kind: 'radius', id: h.id, y: h.pos.y, recorded: false };
           return;
@@ -247,7 +255,7 @@ export class Tools extends EventTarget {
       const h = this._pickHandle(ndc);
       const ra = h || e.altKey ? null : this._railAt(ndc);
       if (ra) this._showRailHint(ra);
-      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : 'grab') : ra ? 'copy' : 'default';
+      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : h.kind === 'top' ? 'ns-resize' : 'grab') : ra ? 'copy' : 'default';
       return;
     }
     const p = this._cursorPoint(ndc, e);
@@ -723,6 +731,7 @@ export class Tools extends EventTarget {
   // ---------------------------------------------------------- arraste
   _doDrag(ndc, e) {
     const d = this.drag;
+    if (d.kind === 'top') { this._dragTop(ndc, e); return; }
     const hit = this.vp.groundPoint(ndc, d.y);
     if (!hit) return;
     const record = !d.recorded;
@@ -862,6 +871,55 @@ export class Tools extends EventTarget {
    * Resolve o corredor `o` entrando em outros perto do nó `index`: empurra os
    * corredores sem agentes; os demais ficam em `stuck` (id -> 'agents' | 'block').
    */
+  /** Altura do cursor numa reta vertical passando pela alça (plano de frente para a câmera). */
+  _verticalY(ndc, e, d) {
+    const cam = this.vp.camera;
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    const n = new THREE.Vector3(dir.x, 0, dir.z);
+    if (n.lengthSq() > 0.01 && !cam.isOrthographicCamera) {
+      n.normalize();
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, new THREE.Vector3(d.pos.x, d.pos.y, d.pos.z));
+      const p = this.vp.raycaster(ndc).ray.intersectPlane(plane, new THREE.Vector3());
+      if (p) return p.y;
+    }
+    // vista de cima: usa o deslocamento vertical do mouse na tela
+    const r = this.vp.dom.getBoundingClientRect();
+    const perPx = cam.isOrthographicCamera ? (cam.top - cam.bottom) / cam.zoom / r.height : cam.position.distanceTo(new THREE.Vector3(d.pos.x, d.pos.y, d.pos.z)) / r.height;
+    return d.top + (d.sy - e.clientY) * perPx;
+  }
+
+  _dragTop(ndc, e) {
+    const d = this.drag;
+    const y = this._verticalY(ndc, e, d);
+    if (y == null || !isFinite(y)) return;
+    const record = !d.recorded;
+    d.recorded = true;
+    const doc = this.store.doc;
+    const baseLevel = this.store.level(this.store.get(d.id)?.levelId);
+    const snapOn = doc.settings.snap && !e.altKey;
+    const res = snapTopToLevels(y, doc.levels, { free: !snapOn, minY: d.base });
+    const topLevel = this.store.level(res.levelId);
+    this.store.mutate((dd) => {
+      const o = dd.objects.find((x) => x.id === d.id);
+      if (!o) return;
+      if (!topLevel || !baseLevel || topLevel.elevation <= baseLevel.elevation + 1e-3) {
+        // topo dentro do próprio andar: escala Y comum
+        o.topLevelId = null;
+        o.topOffset = 0;
+        o.scale.y = Math.max(0.05, (res.y - d.base) / d.unitH);
+      } else {
+        o.topLevelId = topLevel.id;
+        o.topOffset = +res.offset.toFixed(3);
+      }
+    }, { ids: [d.id], record });
+    const lvl = topLevel && Math.abs(res.offset) < 1e-3 && topLevel.elevation > (baseLevel?.elevation ?? 0) ? topLevel : null;
+    this.linkTip.textContent = lvl ? `Encaixa no andar ${lvl.name} (${lvl.elevation} m)` : `Altura ${(res.y - d.base).toFixed(2)} m${snapOn ? '' : ' · livre'}`;
+    this.linkTip.classList.toggle('join', !!lvl);
+    this._linkAt = new THREE.Vector3(d.pos.x, res.y, d.pos.z);
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+  }
+
   _pushAway(doc, o, index, opts) {
     const ctx = this.vp.ctx;
     const pushed = new Set(), stuck = new Map(), agents = new Map();
@@ -1178,6 +1236,7 @@ export class Tools extends EventTarget {
     this.handles.clear();
     if (this.vp.playing) return;
     const o = this.store.get(this.store.selection);
+    if (o?.type === 'asset' && this.store.multi.size <= 1) { this._assetHandles(o); return; }
     if (!o || !PATH_TYPES.has(o.type)) return;
     const rail = this._rail();
     if (rail) {
@@ -1259,11 +1318,32 @@ export class Tools extends EventTarget {
     this.handles.add(line);
   }
 
+  /** Alça no topo do asset + marcas na altura de cada andar acima da base. */
+  _assetHandles(o) {
+    const g = this.vp.objects.get(o.id);
+    if (!g) return;
+    const base = this.vp.ctx.levelY(o.levelId) + (o.y || 0);
+    const top = base + (g.userData.height ?? 1);
+    const pts = [];
+    for (const l of this.store.doc.levels) {
+      if (l.elevation <= base + 1e-3) continue;
+      const r = 0.9;
+      pts.push(new THREE.Vector3(o.x - r, l.elevation, o.z), new THREE.Vector3(o.x + r, l.elevation, o.z),
+        new THREE.Vector3(o.x, l.elevation, o.z - r), new THREE.Vector3(o.x, l.elevation, o.z + r));
+    }
+    pts.push(new THREE.Vector3(o.x, base, o.z), new THREE.Vector3(o.x, Math.max(top, ...pts.map((p) => p.y)), o.z));
+    const marks = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), GUIDE_MAT.ring);
+    marks.renderOrder = 18;
+    marks.raycast = () => {};
+    this.handles.add(marks);
+    this._addHandle(this.handles, { x: o.x, y: top, z: o.z }, 'top', { id: o.id });
+  }
+
   _addHandle(parent, pos, kind, data = {}) {
     const isMid = kind === 'mid';
     const round = kind === 'edge' || kind === 'radius';
     const geo = isMid ? HANDLE_GEO.mid : round ? HANDLE_GEO.edge : HANDLE_GEO.point;
-    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : round ? HANDLE_MAT.edgeHandle : kind === 'center' ? HANDLE_MAT.draft : HANDLE_MAT.point;
+    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : round ? HANDLE_MAT.edgeHandle : kind === 'center' || kind === 'top' ? HANDLE_MAT.draft : HANDLE_MAT.point;
     const m = new THREE.Mesh(geo, mat);
     m.position.set(pos.x, pos.y, pos.z);
     m.renderOrder = 30;
@@ -1283,7 +1363,7 @@ export class Tools extends EventTarget {
     const rc = this.vp.raycaster(ndc);
     const hits = rc.intersectObjects(list, false);
     // pontos têm prioridade sobre meios
-    const rank = { point: 0, radius: 0, center: 1, edge: 1, mid: 2 };
+    const rank = { point: 0, radius: 0, top: 0, center: 1, edge: 1, mid: 2 };
     let obj = null;
     if (hits.length) {
       hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
