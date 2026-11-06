@@ -1,6 +1,5 @@
 // Modelo de dados do level (JSON serializável) e valores padrão.
 import { uid, withDefaults, deepClone } from './util.js';
-import { LEDGE_DEFAULTS } from './levels.js';
 
 export const DOC_VERSION = 1;
 
@@ -96,8 +95,8 @@ export const TYPE_DEFAULTS = {
     // vai até outro andar: a altura sai do andar de topo (+ ajuste) e ignora a escala Y
     topLevelId: null,
     topOffset: 0,
-    // plataformas presas ao bloco, em qualquer altura (m a partir da base)
-    ledges: [],
+    // preso a outro asset: x, z, y e rotY passam a ser relativos a ele e ele carrega este junto
+    parentId: null,
   },
   light: {
     name: 'Luz',
@@ -181,10 +180,8 @@ export function normalizeObject(obj) {
     }
     withDefaults(obj.params, AGENT_MODES[obj.role][obj.mode].params);
   }
-  if (obj.type === 'asset') {
-    if (!Array.isArray(obj.ledges)) obj.ledges = [];
-    for (const l of obj.ledges) withDefaults(l, LEDGE_DEFAULTS);
-  }
+  // paredes, corredores e áreas podem ir até outro andar (altura acompanha a elevação)
+  if (['wall', 'corridor', 'area'].includes(obj.type)) withDefaults(obj, { topLevelId: null, topOffset: 0 });
   return obj;
 }
 

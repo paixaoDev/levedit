@@ -677,6 +677,5 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
   .panel.left, .panel.right { height: 58dvh; }
 }
 
-/* plataformas de um asset que atravessa andares */
-.ledge-head { display: flex; align-items: center; justify-content: space-between; margin: 10px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted, #8a7a62); }
-.ledge-head:first-of-type { margin-top: 4px; }
+/* objetos presos a outro objeto */
+.attach-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0 2px; font-size: 12px; }

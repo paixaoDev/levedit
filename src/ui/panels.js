@@ -1,9 +1,9 @@
 // Painéis: níveis, lista de objetos, opções da ferramenta e propriedades.
 import { el, field, group } from './fields.js';
-import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject } from '../model.js';
+import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject, makeObject } from '../model.js';
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
-import { LEDGE_SIDES, LEDGE_DEFAULTS, objectLevelIds, assetHeight, suggestLedgeHeight } from '../levels.js';
+import { objectLevelIds, assetHeight, suggestChildHeight, worldTransform, toParentLocal, withDescendants, wallHeightOf } from '../levels.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
@@ -297,7 +297,8 @@ export class Panels {
       box.append(meta(`${pathLength(samples, o.closed).toFixed(1)} m · ${o.points.length} nós`));
       box.append(el('div', { class: 'quick' },
         F({ key: 'width', label: 'Largura', type: 'range', min: 1, max: 30, step: 0.5 }),
-        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1 }),
+        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => !x.topLevelId }),
+        this.topFields(o, F),
         F({ key: 'walls.color', label: 'Cor', type: 'color' }),
       ));
       const gi = this.groupInfo(o);
@@ -342,7 +343,8 @@ export class Panels {
     } else if (o.type === 'wall') {
       box.append(meta(`${o.points.length} nós`));
       box.append(el('div', { class: 'quick' },
-        F({ key: 'height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1 }),
+        F({ key: 'height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => !x.topLevelId }),
+        this.topFields(o, F),
         F({ key: 'color', label: 'Cor', type: 'color' }),
       ));
       box.append(G('Forma', [
@@ -374,7 +376,8 @@ export class Panels {
       ]));
       box.append(G('Paredes', [
         F({ key: 'walls.enabled', label: 'Paredes', type: 'bool' }),
-        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => x.walls.enabled }),
+        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => x.walls.enabled && !x.topLevelId }),
+        ...(o.walls.enabled ? this.topFields(o, F) : []),
         F({ key: 'walls.thickness', label: 'Espessura', type: 'range', min: 0.05, max: 2, step: 0.05, show: (x) => x.walls.enabled }),
         F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.enabled }),
         F({ key: 'walls.color', label: 'Cor', type: 'color', show: (x) => x.walls.enabled }),
@@ -405,8 +408,8 @@ export class Panels {
         F({ key: 'color', label: 'Cor', type: 'color' }),
         F({ key: 'collider', label: 'Colisão', type: 'bool' }),
       ]));
-      box.append(G('Andares', this.spanFields(o, F)));
-      box.append(G('Plataformas', this.ledgeFields(o, F)));
+      box.append(G('Andares', this.topFields(o, F)));
+      box.append(G('Preso a outro objeto', this.attachFields(o)));
       box.append(G('Transformação', [
         ...this.transformFields(o, F),
         F({ key: 'y', label: 'Altura da base (Y)', type: 'number', step: 0.1 }),
@@ -447,7 +450,7 @@ export class Panels {
 
   transformFields(o, F) {
     return [
-      el('div', { class: 'field' }, el('label', {}, 'Posição X / Z'), el('div', { class: 'vec' }, ...['x', 'z'].map((k) => {
+      el('div', { class: 'field' }, el('label', {}, o.parentId ? 'Posição X / Z (no pai)' : 'Posição X / Z'), el('div', { class: 'vec' }, ...['x', 'z'].map((k) => {
         const i = el('input', { type: 'number', step: 0.5, value: +o[k].toFixed(2) });
         i.addEventListener('change', () => this.change(o.id, k, +i.value, true));
         return i;
@@ -561,40 +564,41 @@ export class Panels {
     this.renderProps();
   }
 
-  /** Asset que atravessa andares: andar do topo + ajuste. */
-  spanFields(o, F) {
+  /** Encaixe vertical: andar do topo + ajuste (assets, paredes, corredores, áreas). */
+  topFields(o, F) {
     const doc = this.store.doc;
-    const baseY = this.app.vp.ctx.levelY(o.levelId) + (o.y || 0);
+    const isAsset = o.type === 'asset';
+    const baseY = isAsset ? worldTransform(o, doc, this.app.vp.ctx.levelY).y : this.app.vp.ctx.levelY(o.levelId);
     const above = Object.fromEntries(doc.levels.filter((l) => l.elevation > baseY + 1e-3)
       .sort((a, b) => a.elevation - b.elevation).map((l) => [l.id, `${l.name} (${l.elevation} m)`]));
-    const h = this.assetHeightOf(o);
+    const h = isAsset ? this.assetHeightOf(o) : wallHeightOf(o);
     const n = objectLevelIds(o, doc).size;
     return [
-      F({ key: 'topLevelId', label: 'Vai até o andar', type: 'select', options: { '': '— só este andar —', ...above }, tip: 'O topo encaixa na altura do andar escolhido e acompanha se ele mudar' }),
+      F({ key: 'topLevelId', label: 'Vai até o andar', type: 'select', options: { '': '— altura livre —', ...above }, tip: 'O topo encaixa na altura do andar escolhido e acompanha se ele mudar' }),
       F({ key: 'topOffset', label: 'Ajuste no topo (m)', type: 'number', step: 0.25, show: (x) => !!x.topLevelId }),
       el('p', { class: 'info' }, o.topLevelId
-        ? `Altura ${h.toFixed(2)} m · aparece em ${n} andares. Arraste a alça do topo para trocar de andar (Alt solta o ímã).`
-        : 'Arraste a alça do topo para cima: ela encaixa na altura de cada andar (Alt solta o ímã).'),
+        ? `Altura ${(+h).toFixed(2)} m · aparece em ${n} andares. Arraste a alça do topo para trocar de andar (Alt solta o ímã).`
+        : 'Arraste a alça do topo: a altura encaixa em cada andar (Alt solta o ímã).'),
     ];
   }
 
-  /** Plataformas presas ao bloco, em qualquer altura entre os andares. */
-  ledgeFields(o, F) {
-    const h = this.assetHeightOf(o);
-    const out = [];
-    (o.ledges || []).forEach((l, i) => {
-      out.push(el('div', { class: 'ledge-head' }, el('span', {}, `Plataforma ${i + 1}`),
-        el('button', { class: 'btn ghost small', type: 'button', onclick: () => this.removeLedge(o.id, i) }, 'Remover')));
-      out.push(
-        F({ key: `ledges.${i}.h`, label: 'Altura (m)', type: 'range', min: 0, max: Math.max(0.5, +h.toFixed(2)), step: 0.05, tip: 'Altura do piso da plataforma a partir da base' }),
-        F({ key: `ledges.${i}.side`, label: 'Lado', type: 'select', options: LEDGE_SIDES }),
-        F({ key: `ledges.${i}.depth`, label: 'Profundidade', type: 'range', min: 0.2, max: 6, step: 0.1 }),
-        F({ key: `ledges.${i}.width`, label: 'Largura (%)', type: 'range', min: 0.1, max: 1, step: 0.05, show: (x) => x.ledges[i]?.side !== 'all' }),
-        F({ key: `ledges.${i}.thickness`, label: 'Espessura', type: 'range', min: 0.05, max: 1, step: 0.05 }),
-      );
-    });
+  /** Prender um asset a outro: ele passa a andar, girar e subir junto com o pai. */
+  attachFields(o) {
+    const doc = this.store.doc;
+    const blocked = withDescendants(doc, [o.id]);
+    const parents = Object.fromEntries(doc.objects.filter((x) => x.type === 'asset' && !blocked.has(x.id)).map((x) => [x.id, x.name]));
+    const sel = el('select', { id: 'attach-parent' }, el('option', { value: '' }, '— solto —'),
+      ...Object.entries(parents).map(([v, label]) => el('option', { value: v, selected: v === o.parentId }, label)));
+    sel.addEventListener('change', () => this.attach(o.id, sel.value || null));
+    const kids = doc.objects.filter((x) => x.parentId === o.id);
+    const out = [el('div', { class: 'field field-select' }, el('label', { for: 'attach-parent' }, 'Preso a'), sel)];
+    if (o.parentId) out.push(el('p', { class: 'info' }, 'Posição, altura e rotação são relativas ao objeto pai: ele carrega este junto. Arraste a alça da base para subir ou descer (encaixa nos andares e no topo do pai).'));
+    if (kids.length) {
+      out.push(el('div', { class: 'attach-list' }, el('span', { class: 'muted' }, 'Presos aqui:'),
+        ...kids.map((k) => el('button', { class: 'btn ghost small', type: 'button', onclick: () => this.store.select(k.id) }, k.name))));
+    }
     out.push(el('div', { class: 'props-actions' },
-      el('button', { class: 'btn small', type: 'button', onclick: () => this.addLedge(o.id), 'data-tip': 'Plataforma onde o player anda e pula, entre os andares' }, '+ Plataforma')));
+      el('button', { class: 'btn small', type: 'button', onclick: () => this.addAttachedPlatform(o.id), 'data-tip': 'Plataforma presa a este objeto, entre os andares' }, '+ Plataforma presa')));
     return out;
   }
 
@@ -602,21 +606,42 @@ export class Panels {
     return this.app.vp.objects.get(o.id)?.userData.height ?? assetHeight(o, this.app.vp.ctx.levelY);
   }
 
-  addLedge(id) {
+  /** Prende/solta mantendo o objeto no mesmo lugar do mundo. */
+  attach(id, parentId) {
     this.store.mutate((d) => {
       const o = d.objects.find((x) => x.id === id);
       if (!o) return;
-      o.ledges = [...(o.ledges || []), { ...LEDGE_DEFAULTS, h: suggestLedgeHeight(o, d) }];
+      const levelY = (lid) => d.levels.find((l) => l.id === lid)?.elevation ?? 0;
+      const w = worldTransform(o, d, levelY);
+      const p = parentId ? d.objects.find((x) => x.id === parentId) : null;
+      if (p) {
+        const pw = worldTransform(p, d, levelY);
+        const loc = toParentLocal(pw, w.x, w.z);
+        Object.assign(o, { parentId, x: loc.x, z: loc.z, y: w.y - pw.y, rotY: w.rotY - pw.rotY, levelId: p.levelId });
+      } else {
+        Object.assign(o, { parentId: null, x: w.x, z: w.z, rotY: w.rotY, y: w.y - levelY(o.levelId) });
+      }
     }, { ids: [id], structure: true });
     this.renderProps();
   }
 
-  removeLedge(id, index) {
-    this.store.mutate((d) => {
-      const o = d.objects.find((x) => x.id === id);
-      if (o?.ledges) o.ledges.splice(index, 1);
-    }, { ids: [id], structure: true });
-    this.renderProps();
+  /** Cria uma plataforma presa na frente do objeto, no meio do primeiro vão entre andares. */
+  addAttachedPlatform(parentId) {
+    const doc = this.store.doc;
+    const p = this.store.get(parentId);
+    if (!p) return;
+    const fp = this.app.vp.objects.get(parentId)?.userData.footprint || { x0: -0.5, x1: 0.5, z0: -0.5, z1: 0.5 };
+    const h = suggestChildHeight(p, doc);
+    const width = Math.max(1, Math.min(4, (fp.x1 - fp.x0) * 0.6));
+    const depth = 1.4, thick = 0.2;
+    const n = doc.objects.filter((x) => x.parentId === parentId).length + 1;
+    // 'platform' é uma laje 4 x 0,4 x 4
+    const c = makeObject('asset', {
+      name: `Plataforma ${n} (${p.name})`, kind: 'platform', color: p.color, levelId: p.levelId, parentId,
+      x: (fp.x0 + fp.x1) / 2, z: fp.z1 + depth / 2, y: Math.max(0, h - thick), rotY: 0,
+      scale: { x: width / 4, y: thick / 0.4, z: depth / 4 },
+    });
+    this.store.addObject(c);
   }
 
   /** ids do grupo de um objeto (ou só ele). */
@@ -634,7 +659,7 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key) || /^ledges\.\d+\.side$/.test(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {

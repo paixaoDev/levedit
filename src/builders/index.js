@@ -10,7 +10,7 @@ import { corridorSamples, computeJunctions, halfAt, areaOutline, wrapCut } from 
 
 export { corridorSamples };
 import { rng, lerp, smoothstep, shade } from '../util.js';
-import { assetSpan, objectLevelIds } from '../levels.js';
+import { assetSpan, objectLevelIds, worldTransform } from '../levels.js';
 
 /** Contexto: elevação dos níveis. */
 export function makeContext(doc) {
@@ -432,54 +432,26 @@ function buildConnector(o, ctx) {
 
 function buildAsset(o, ctx) {
   const group = new THREE.Group();
-  // corpo escalado num grupo próprio: as plataformas ficam fora da escala
+  // corpo escalado num grupo próprio: o que estiver preso nele não herda a escala
   const body = new THREE.Group();
   for (const p of buildAssetParts(o)) body.add(p);
   const box = new THREE.Box3().setFromObject(body);
   const unitH = Math.max(0.01, box.max.y);
-  const span = assetSpan(o, ctx.levelY);
+  const at = worldTransform(o, ctx.doc, ctx.levelY);
+  const span = assetSpan(o, ctx.levelY, at.y);
   const sx = o.scale.x, sz = o.scale.z;
   const sy = span ? span.height / unitH : o.scale.y;
   body.scale.set(sx, sy, sz);
   group.add(body);
-  const height = unitH * sy;
-  if (o.ledges?.length && !box.isEmpty()) {
-    const foot = { x0: box.min.x * sx, x1: box.max.x * sx, z0: box.min.z * sz, z1: box.max.z * sz };
-    for (const l of o.ledges) for (const m of ledgeMeshes(l, foot, height, o.color)) group.add(m);
-  }
   if (!o.collider) group.traverse((m) => { if (m.isMesh) m.userData.collider = false; });
   group.userData.unitHeight = unitH;
-  group.userData.height = height;
-  group.position.set(o.x, ctx.levelY(o.levelId) + (o.y || 0), o.z);
-  group.rotation.y = o.rotY;
+  group.userData.height = unitH * sy;
+  group.userData.base = at.y;
+  // pegada no chão (local, já com escala) para prender objetos nas faces
+  if (!box.isEmpty()) group.userData.footprint = { x0: box.min.x * sx, x1: box.max.x * sx, z0: box.min.z * sz, z1: box.max.z * sz };
+  group.position.set(at.x, at.y, at.z);
+  group.rotation.y = at.rotY;
   return group;
-}
-
-/** Plataforma presa a um lado do bloco (ou em volta toda), na altura l.h acima da base. */
-function ledgeMeshes(l, foot, height, color) {
-  const t = Math.max(0.05, l.thickness);
-  const d = Math.max(0.1, l.depth);
-  const y = Math.min(Math.max(l.h, t), height) - t / 2;
-  const w = Math.min(Math.max(l.width, 0.1), 1);
-  const cx = (foot.x0 + foot.x1) / 2, cz = (foot.z0 + foot.z1) / 2;
-  const lx = (foot.x1 - foot.x0) * w, lz = (foot.z1 - foot.z0) * w;
-  const all = l.side === 'all';
-  const slabs = {
-    front: [cx, foot.z1 + d / 2, all ? foot.x1 - foot.x0 + 2 * d : lx, d],
-    back: [cx, foot.z0 - d / 2, all ? foot.x1 - foot.x0 + 2 * d : lx, d],
-    right: [foot.x1 + d / 2, cz, d, all ? foot.z1 - foot.z0 : lz],
-    left: [foot.x0 - d / 2, cz, d, all ? foot.z1 - foot.z0 : lz],
-  };
-  const sides = all ? Object.keys(slabs) : [slabs[l.side] ? l.side : 'front'];
-  const geo = sharedGeometry('box1,1,1', () => new THREE.BoxGeometry(1, 1, 1));
-  return sides.map((k) => {
-    const [x, z, sxl, szl] = slabs[k];
-    const m = makeMesh(geo, shade(color, -0.12));
-    m.position.set(x, y, z);
-    m.scale.set(sxl, t, szl);
-    m.userData.ledge = true;
-    return m;
-  });
 }
 
 // ---------------------------------------------------------------- luzes

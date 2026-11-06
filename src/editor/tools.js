@@ -8,7 +8,7 @@ import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs,
 import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, refitArcs, arcToRing, attachParam, wallLines, nearestWall, onLine } from './polar.js';
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
-import { snapTopToLevels } from '../levels.js';
+import { snapTopToLevels, snapVertical, setWallHeight, wallHeightOf, worldTransform, toParentLocal } from '../levels.js';
 
 const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
@@ -139,11 +139,11 @@ export class Tools extends EventTarget {
           this.drag = { kind: 'edge', id: h.id, index: h.index, side: h.side, y: h.pos.y, both: e.shiftKey, recorded: false };
           return;
         }
-        if (h.kind === 'top') {
-          // topo do asset: extruda para cima/baixo encaixando nos andares
+        if (h.kind === 'top' || h.kind === 'lift') {
+          // topo: extruda para cima/baixo; base: sobe/desce o objeto. Os dois encaixam nos andares.
           const g = this.vp.objects.get(h.id);
-          const base = this.vp.ctx.levelY(o.levelId) + (o.y || 0);
-          this.drag = { kind: 'top', id: h.id, base, unitH: g?.userData.unitHeight ?? 1, pos: h.pos, sy: e.clientY, top: h.pos.y, recorded: false };
+          const base = o.type === 'asset' ? (g?.userData.base ?? this.vp.ctx.levelY(o.levelId)) : this.vp.ctx.levelY(o.levelId);
+          this.drag = { kind: h.kind, id: h.id, base, unitH: g?.userData.unitHeight ?? 1, height: g?.userData.height ?? 1, pos: h.pos, sy: e.clientY, top: h.pos.y, recorded: false };
           return;
         }
         if (h.kind === 'radius') {
@@ -197,13 +197,15 @@ export class Tools extends EventTarget {
       if (hit) {
         this.store.select(hit.id);
         const o = this.store.get(hit.id);
-        const y = o.type === 'agent' || o.type === 'asset' || o.type === 'light' ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
+        const y = o.type === 'asset' ? (this.vp.objects.get(o.id)?.userData.base ?? this.vp.ctx.levelY(o.levelId))
+          : o.type === 'agent' || o.type === 'light' ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
         const start = this.vp.groundPoint(ndc, y);
         if (start) {
           this._setControls(false);
           this.drag = {
             kind: 'move', id: hit.id, y, start, recorded: false,
             orig: PATH_TYPES.has(o.type) ? deepClone(o.points) : { x: o.x, z: o.z },
+            origWorld: o.parentId ? worldTransform(o, this.store.doc, this.vp.ctx.levelY) : null,
           };
         }
       } else {
@@ -255,7 +257,7 @@ export class Tools extends EventTarget {
       const h = this._pickHandle(ndc);
       const ra = h || e.altKey ? null : this._railAt(ndc);
       if (ra) this._showRailHint(ra);
-      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : h.kind === 'top' ? 'ns-resize' : 'grab') : ra ? 'copy' : 'default';
+      this.vp.dom.style.cursor = h ? (h.kind === 'mid' ? 'copy' : h.kind === 'edge' ? 'ew-resize' : h.kind === 'top' || h.kind === 'lift' ? 'ns-resize' : 'grab') : ra ? 'copy' : 'default';
       return;
     }
     const p = this._cursorPoint(ndc, e);
@@ -732,6 +734,7 @@ export class Tools extends EventTarget {
   _doDrag(ndc, e) {
     const d = this.drag;
     if (d.kind === 'top') { this._dragTop(ndc, e); return; }
+    if (d.kind === 'lift') { this._dragLift(ndc, e); return; }
     const hit = this.vp.groundPoint(ndc, d.y);
     if (!hit) return;
     const record = !d.recorded;
@@ -858,6 +861,13 @@ export class Tools extends EventTarget {
         if (PATH_TYPES.has(o.type)) {
           if (s.snap && !e.altKey) { dx = snap(dx, s.gridSize / 2); dz = snap(dz, s.gridSize / 2); }
           o.points = d.orig.map(({ att, ...p }) => ({ ...p, x: p.x + dx, z: p.z + dz })); // mover solta as pontas presas
+        } else if (o.parentId && d.origWorld) {
+          // preso a outro: anda no mundo e guarda relativo ao pai
+          const step = s.snap && !e.altKey ? s.gridSize / 4 : 0;
+          const pw = worldTransform(doc.objects.find((x) => x.id === o.parentId), doc, this.vp.ctx.levelY);
+          const loc = toParentLocal(pw, d.origWorld.x + dx, d.origWorld.z + dz);
+          o.x = snap(loc.x, step);
+          o.z = snap(loc.z, step);
         } else {
           const step = s.snap && !e.altKey ? s.gridSize / 2 : 0;
           o.x = snap(d.orig.x + dx, step);
@@ -895,26 +905,54 @@ export class Tools extends EventTarget {
     const record = !d.recorded;
     d.recorded = true;
     const doc = this.store.doc;
-    const baseLevel = this.store.level(this.store.get(d.id)?.levelId);
     const snapOn = doc.settings.snap && !e.altKey;
     const res = snapTopToLevels(y, doc.levels, { free: !snapOn, minY: d.base });
     const topLevel = this.store.level(res.levelId);
     this.store.mutate((dd) => {
       const o = dd.objects.find((x) => x.id === d.id);
       if (!o) return;
-      if (!topLevel || !baseLevel || topLevel.elevation <= baseLevel.elevation + 1e-3) {
-        // topo dentro do próprio andar: escala Y comum
+      if (!topLevel || topLevel.elevation <= d.base + 1e-3) {
+        // topo abaixo do próximo andar: altura livre (escala Y no asset, altura na parede)
         o.topLevelId = null;
         o.topOffset = 0;
-        o.scale.y = Math.max(0.05, (res.y - d.base) / d.unitH);
+        if (o.type === 'asset') o.scale.y = Math.max(0.05, (res.y - d.base) / d.unitH);
+        else setWallHeight(o, +Math.max(0.2, res.y - d.base).toFixed(3));
       } else {
         o.topLevelId = topLevel.id;
         o.topOffset = +res.offset.toFixed(3);
       }
     }, { ids: [d.id], record });
-    const lvl = topLevel && Math.abs(res.offset) < 1e-3 && topLevel.elevation > (baseLevel?.elevation ?? 0) ? topLevel : null;
+    const lvl = topLevel && Math.abs(res.offset) < 1e-3 && topLevel.elevation > d.base + 1e-3 ? topLevel : null;
     this.linkTip.textContent = lvl ? `Encaixa no andar ${lvl.name} (${lvl.elevation} m)` : `Altura ${(res.y - d.base).toFixed(2)} m${snapOn ? '' : ' · livre'}`;
     this.linkTip.classList.toggle('join', !!lvl);
+    this._linkAt = new THREE.Vector3(d.pos.x, res.y, d.pos.z);
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+  }
+
+  /** Sobe/desce um asset pela base, encaixando nos andares e no topo/base do objeto pai. */
+  _dragLift(ndc, e) {
+    const d = this.drag;
+    const y = this._verticalY(ndc, e, d);
+    if (y == null || !isFinite(y)) return;
+    const record = !d.recorded;
+    d.recorded = true;
+    const doc = this.store.doc;
+    const o = this.store.get(d.id);
+    if (!o) return;
+    const pg = o.parentId ? this.vp.objects.get(o.parentId) : null;
+    const ref = pg ? pg.userData.base : this.vp.ctx.levelY(o.levelId); // y do objeto é relativo a isto
+    const marks = doc.levels.map((l) => l.elevation);
+    const names = doc.levels.map((l) => `andar ${l.name}`);
+    if (pg) { marks.push(pg.userData.base + pg.userData.height); names.push('topo do pai'); }
+    const snapOn = doc.settings.snap && !e.altKey;
+    const res = snapVertical(y, marks, { free: !snapOn });
+    this.store.mutate((dd) => {
+      const t = dd.objects.find((x) => x.id === d.id);
+      if (t) t.y = +(res.y - ref).toFixed(3);
+    }, { ids: [d.id], record });
+    this.linkTip.textContent = res.mark >= 0 ? `Encaixa no ${names[res.mark]} (${res.y.toFixed(2)} m)` : `Base em ${res.y.toFixed(2)} m${snapOn ? '' : ' · livre'}`;
+    this.linkTip.classList.toggle('join', res.mark >= 0);
     this._linkAt = new THREE.Vector3(d.pos.x, res.y, d.pos.z);
     this.linkTip.hidden = false;
     this._placeLinkTip();
@@ -1238,6 +1276,7 @@ export class Tools extends EventTarget {
     const o = this.store.get(this.store.selection);
     if (o?.type === 'asset' && this.store.multi.size <= 1) { this._assetHandles(o); return; }
     if (!o || !PATH_TYPES.has(o.type)) return;
+    if (this.store.multi.size <= 1) this._wallTopHandle(o);
     const rail = this._rail();
     if (rail) {
       const pts = rail.line.pts.map((q) => new THREE.Vector3(q.x, rail.top, q.z));
@@ -1322,28 +1361,48 @@ export class Tools extends EventTarget {
   _assetHandles(o) {
     const g = this.vp.objects.get(o.id);
     if (!g) return;
-    const base = this.vp.ctx.levelY(o.levelId) + (o.y || 0);
+    const { x, z } = g.position;
+    const base = g.userData.base ?? g.position.y;
     const top = base + (g.userData.height ?? 1);
+    this._levelRuler(x, z, base, top);
+    this._addHandle(this.handles, { x, y: top, z }, 'top', { id: o.id });
+    // base: na quina da pegada, para não brigar com a do topo em objetos baixos
+    const fp = g.userData.footprint;
+    const c = new THREE.Vector3(fp ? fp.x1 : 0.5, 0, fp ? fp.z1 : 0.5).applyAxisAngle(new THREE.Vector3(0, 1, 0), g.rotation.y);
+    this._addHandle(this.handles, { x: x + c.x, y: base, z: z + c.z }, 'lift', { id: o.id });
+  }
+
+  /** Alça no topo de paredes, corredores e áreas: altura encaixa nos andares. */
+  _wallTopHandle(o) {
+    const p = o.points[0];
+    const h = wallHeightOf(o);
+    if (!p || !h || (o.type === 'area' && !o.walls.enabled)) return;
+    const base = this.vp.ctx.levelY(o.levelId);
+    this._levelRuler(p.x, p.z, base, base + h);
+    this._addHandle(this.handles, { x: p.x, y: base + h, z: p.z }, 'top', { id: o.id });
+  }
+
+  /** "Grade vertical": marcas na altura de cada andar acima da base, numa haste. */
+  _levelRuler(x, z, base, top) {
     const pts = [];
+    const r = 0.9;
     for (const l of this.store.doc.levels) {
       if (l.elevation <= base + 1e-3) continue;
-      const r = 0.9;
-      pts.push(new THREE.Vector3(o.x - r, l.elevation, o.z), new THREE.Vector3(o.x + r, l.elevation, o.z),
-        new THREE.Vector3(o.x, l.elevation, o.z - r), new THREE.Vector3(o.x, l.elevation, o.z + r));
+      pts.push(new THREE.Vector3(x - r, l.elevation, z), new THREE.Vector3(x + r, l.elevation, z),
+        new THREE.Vector3(x, l.elevation, z - r), new THREE.Vector3(x, l.elevation, z + r));
     }
-    pts.push(new THREE.Vector3(o.x, base, o.z), new THREE.Vector3(o.x, Math.max(top, ...pts.map((p) => p.y)), o.z));
+    pts.push(new THREE.Vector3(x, base, z), new THREE.Vector3(x, Math.max(top, ...pts.map((q) => q.y)), z));
     const marks = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), GUIDE_MAT.ring);
     marks.renderOrder = 18;
     marks.raycast = () => {};
     this.handles.add(marks);
-    this._addHandle(this.handles, { x: o.x, y: top, z: o.z }, 'top', { id: o.id });
   }
 
   _addHandle(parent, pos, kind, data = {}) {
     const isMid = kind === 'mid';
     const round = kind === 'edge' || kind === 'radius';
     const geo = isMid ? HANDLE_GEO.mid : round ? HANDLE_GEO.edge : HANDLE_GEO.point;
-    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : round ? HANDLE_MAT.edgeHandle : kind === 'center' || kind === 'top' ? HANDLE_MAT.draft : HANDLE_MAT.point;
+    const mat = kind === 'draft' ? HANDLE_MAT.draft : isMid ? HANDLE_MAT.mid : round ? HANDLE_MAT.edgeHandle : kind === 'center' || kind === 'top' || kind === 'lift' ? HANDLE_MAT.draft : HANDLE_MAT.point;
     const m = new THREE.Mesh(geo, mat);
     m.position.set(pos.x, pos.y, pos.z);
     m.renderOrder = 30;
@@ -1363,7 +1422,7 @@ export class Tools extends EventTarget {
     const rc = this.vp.raycaster(ndc);
     const hits = rc.intersectObjects(list, false);
     // pontos têm prioridade sobre meios
-    const rank = { point: 0, radius: 0, top: 0, center: 1, edge: 1, mid: 2 };
+    const rank = { point: 0, radius: 0, top: 0, lift: 1, center: 1, edge: 1, mid: 2 };
     let obj = null;
     if (hits.length) {
       hits.sort((a, b) => (rank[a.object.userData.handle] ?? 3) - (rank[b.object.userData.handle] ?? 3));
