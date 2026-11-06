@@ -92,6 +92,11 @@ export const TYPE_DEFAULTS = {
     color: '#e9e2d4',
     customId: null,
     collider: true,
+    // vai até outro andar: a altura sai do andar de topo (+ ajuste) e ignora a escala Y
+    topLevelId: null,
+    topOffset: 0,
+    // preso a outro asset: x, z, y e rotY passam a ser relativos a ele e ele carrega este junto
+    parentId: null,
   },
   light: {
     name: 'Luz',
@@ -175,6 +180,8 @@ export function normalizeObject(obj) {
     }
     withDefaults(obj.params, AGENT_MODES[obj.role][obj.mode].params);
   }
+  // paredes, corredores e áreas podem ir até outro andar (altura acompanha a elevação)
+  if (['wall', 'corridor', 'area'].includes(obj.type)) withDefaults(obj, { topLevelId: null, topOffset: 0 });
   return obj;
 }
 

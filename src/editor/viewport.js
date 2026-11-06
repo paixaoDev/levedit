@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { THEME, STIPPLE, applyVisualState, setRoofView } from '../render/materials.js';
 import { LightRig, installRoofShadowPass } from '../render/lighting.js';
 import { buildObject, makeContext } from '../builders/index.js';
+import { objectLevelIds } from '../levels.js';
 
 export class Viewport {
   constructor(container, store) {
@@ -228,8 +229,8 @@ export class Viewport {
       if (!o) continue;
       const lvl = this.store.level(o.levelId);
       const levelVisible = lvl ? lvl.visible : true;
-      const other = o.levelId !== active && !(o.type === 'corridor' && o.endLevelId === active)
-        && !(o.type === 'connector' && (o.toLevelId === active || o.fromLevelId === active));
+      // corredores/escadas entre andares e assets que atravessam andares contam em todos eles
+      const other = !objectLevelIds(o, doc).has(active);
       g.visible = levelVisible && !(other && mode === 'hide');
       const state = this.store.isSelected(id) ? 'selected' : other && mode === 'ghost' ? 'ghost' : 'normal';
       applyVisualState(g, state);
@@ -268,7 +269,7 @@ export class Viewport {
     const active = this.store.doc.activeLevelId;
     // preferir objetos do nível ativo quando os outros estão "fantasma"
     const ordered = this.store.doc.settings.otherLevels === 'ghost'
-      ? [...hits.filter((h) => levelOf(h.object) === active), ...hits.filter((h) => levelOf(h.object) !== active)]
+      ? [...hits.filter((h) => onLevel(h.object, active)), ...hits.filter((h) => !onLevel(h.object, active))]
       : hits;
     for (const h of ordered) {
       let o = h.object;
@@ -323,7 +324,7 @@ function isVisibleChain(o) {
   return true;
 }
 
-function levelOf(o) {
+function onLevel(o, levelId) {
   while (o && !o.userData.objId) o = o.parent;
-  return o?.userData.levelId;
+  return o?.userData.levelIds ? o.userData.levelIds.has(levelId) : o?.userData.levelId === levelId;
 }

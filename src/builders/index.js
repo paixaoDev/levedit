@@ -10,6 +10,7 @@ import { corridorSamples, computeJunctions, halfAt, areaOutline, wrapCut } from 
 
 export { corridorSamples };
 import { rng, lerp, smoothstep, shade } from '../util.js';
+import { assetSpan, objectLevelIds, worldTransform } from '../levels.js';
 
 /** Contexto: elevação dos níveis. */
 export function makeContext(doc) {
@@ -41,6 +42,7 @@ export function buildObject(obj, ctx) {
   }
   g.userData.objId = obj.id;
   g.userData.levelId = obj.levelId;
+  g.userData.levelIds = objectLevelIds(obj, ctx.doc);
   g.name = obj.name || obj.type;
   return g;
 }
@@ -430,13 +432,25 @@ function buildConnector(o, ctx) {
 
 function buildAsset(o, ctx) {
   const group = new THREE.Group();
-  for (const p of buildAssetParts(o)) {
-    if (!o.collider) p.traverse((m) => { if (m.isMesh) m.userData.collider = false; });
-    group.add(p);
-  }
-  group.position.set(o.x, ctx.levelY(o.levelId) + (o.y || 0), o.z);
-  group.rotation.y = o.rotY;
-  group.scale.set(o.scale.x, o.scale.y, o.scale.z);
+  // corpo escalado num grupo próprio: o que estiver preso nele não herda a escala
+  const body = new THREE.Group();
+  for (const p of buildAssetParts(o)) body.add(p);
+  const box = new THREE.Box3().setFromObject(body);
+  const unitH = Math.max(0.01, box.max.y);
+  const at = worldTransform(o, ctx.doc, ctx.levelY);
+  const span = assetSpan(o, ctx.levelY, at.y);
+  const sx = o.scale.x, sz = o.scale.z;
+  const sy = span ? span.height / unitH : o.scale.y;
+  body.scale.set(sx, sy, sz);
+  group.add(body);
+  if (!o.collider) group.traverse((m) => { if (m.isMesh) m.userData.collider = false; });
+  group.userData.unitHeight = unitH;
+  group.userData.height = unitH * sy;
+  group.userData.base = at.y;
+  // pegada no chão (local, já com escala) para prender objetos nas faces
+  if (!box.isEmpty()) group.userData.footprint = { x0: box.min.x * sx, x1: box.max.x * sx, z0: box.min.z * sz, z1: box.max.z * sz };
+  group.position.set(at.x, at.y, at.z);
+  group.rotation.y = at.rotY;
   return group;
 }
 

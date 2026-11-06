@@ -1,8 +1,9 @@
 // Painéis: níveis, lista de objetos, opções da ferramenta e propriedades.
 import { el, field, group } from './fields.js';
-import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject } from '../model.js';
+import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject, makeObject } from '../model.js';
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
+import { objectLevelIds, assetHeight, suggestChildHeight, worldTransform, toParentLocal, withDescendants, wallHeightOf } from '../levels.js';
 import { samplePath, pathLength } from '../math/curve.js';
 import { JOIN_STYLES, markEdited } from '../builders/corridorPath.js';
 import { TOOL_INFO } from '../editor/tools.js';
@@ -78,7 +79,7 @@ export class Panels {
     this.$levels.innerHTML = '';
     const sorted = [...doc.levels].sort((a, b) => b.elevation - a.elevation);
     for (const l of sorted) {
-      const count = doc.objects.filter((o) => o.levelId === l.id).length;
+      const count = doc.objects.filter((o) => objectLevelIds(o, doc).has(l.id)).length;
       const active = doc.activeLevelId === l.id;
       const eye = el('button', {
         class: `eye ${l.visible ? '' : 'off'}`, type: 'button', 'data-tip': l.visible ? 'Ocultar andar' : 'Mostrar andar', 'aria-label': l.visible ? 'Ocultar andar' : 'Mostrar andar',
@@ -112,6 +113,7 @@ export class Panels {
       d.levels = d.levels.filter((x) => x.id !== l.id);
       d.objects = d.objects.filter((o) => o.levelId !== l.id);
       for (const o of d.objects) {
+        if (o.topLevelId === l.id) { o.topLevelId = null; o.topOffset = 0; }
         if (o.endLevelId === l.id) o.endLevelId = null;
         if (o.toLevelId === l.id) o.toLevelId = o.levelId;
         if (o.fromLevelId === l.id) o.fromLevelId = o.levelId;
@@ -138,7 +140,7 @@ export class Panels {
       for (const o of items) {
         const color = o.color || o.walls?.color || o.floor?.color || '#fff';
         const li = el('li', {
-          class: `item ${this.store.isSelected(o.id) ? 'selected' : ''} ${o.levelId !== doc.activeLevelId ? 'dim' : ''}`,
+          class: `item ${this.store.isSelected(o.id) ? 'selected' : ''} ${objectLevelIds(o, doc).has(doc.activeLevelId) ? '' : 'dim'}`,
           title: o.name,
           onclick: (e) => { this.store.select(o.id, { add: e.shiftKey || e.ctrlKey || e.metaKey }); },
           ondblclick: () => this.app.focusSelection(),
@@ -295,7 +297,8 @@ export class Panels {
       box.append(meta(`${pathLength(samples, o.closed).toFixed(1)} m · ${o.points.length} nós`));
       box.append(el('div', { class: 'quick' },
         F({ key: 'width', label: 'Largura', type: 'range', min: 1, max: 30, step: 0.5 }),
-        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1 }),
+        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => !x.topLevelId }),
+        this.topFields(o, F),
         F({ key: 'walls.color', label: 'Cor', type: 'color' }),
       ));
       const gi = this.groupInfo(o);
@@ -340,7 +343,8 @@ export class Panels {
     } else if (o.type === 'wall') {
       box.append(meta(`${o.points.length} nós`));
       box.append(el('div', { class: 'quick' },
-        F({ key: 'height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1 }),
+        F({ key: 'height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => !x.topLevelId }),
+        this.topFields(o, F),
         F({ key: 'color', label: 'Cor', type: 'color' }),
       ));
       box.append(G('Forma', [
@@ -372,7 +376,8 @@ export class Panels {
       ]));
       box.append(G('Paredes', [
         F({ key: 'walls.enabled', label: 'Paredes', type: 'bool' }),
-        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => x.walls.enabled }),
+        F({ key: 'walls.height', label: 'Altura', type: 'range', min: 0.2, max: 12, step: 0.1, show: (x) => x.walls.enabled && !x.topLevelId }),
+        ...(o.walls.enabled ? this.topFields(o, F) : []),
         F({ key: 'walls.thickness', label: 'Espessura', type: 'range', min: 0.05, max: 2, step: 0.05, show: (x) => x.walls.enabled }),
         F({ key: 'walls.mode', label: 'Modo', type: 'select', options: { continuous: 'Contínua', blocks: 'Blocos' }, show: (x) => x.walls.enabled }),
         F({ key: 'walls.color', label: 'Cor', type: 'color', show: (x) => x.walls.enabled }),
@@ -403,11 +408,13 @@ export class Panels {
         F({ key: 'color', label: 'Cor', type: 'color' }),
         F({ key: 'collider', label: 'Colisão', type: 'bool' }),
       ]));
+      box.append(G('Andares', this.topFields(o, F)));
+      box.append(G('Preso a outro objeto', this.attachFields(o)));
       box.append(G('Transformação', [
         ...this.transformFields(o, F),
-        F({ key: 'y', label: 'Altura (Y)', type: 'number', step: 0.1 }),
+        F({ key: 'y', label: 'Altura da base (Y)', type: 'number', step: 0.1 }),
         F({ key: 'scale.x', label: 'Escala X', type: 'range', min: 0.1, max: 10, step: 0.05 }),
-        F({ key: 'scale.y', label: 'Escala Y', type: 'range', min: 0.1, max: 10, step: 0.05 }),
+        F({ key: 'scale.y', label: 'Escala Y', type: 'range', min: 0.1, max: 10, step: 0.05, show: (x) => !x.topLevelId }),
         F({ key: 'scale.z', label: 'Escala Z', type: 'range', min: 0.1, max: 10, step: 0.05 }),
       ]));
     } else if (o.type === 'light') {
@@ -443,7 +450,7 @@ export class Panels {
 
   transformFields(o, F) {
     return [
-      el('div', { class: 'field' }, el('label', {}, 'Posição X / Z'), el('div', { class: 'vec' }, ...['x', 'z'].map((k) => {
+      el('div', { class: 'field' }, el('label', {}, o.parentId ? 'Posição X / Z (no pai)' : 'Posição X / Z'), el('div', { class: 'vec' }, ...['x', 'z'].map((k) => {
         const i = el('input', { type: 'number', step: 0.5, value: +o[k].toFixed(2) });
         i.addEventListener('change', () => this.change(o.id, k, +i.value, true));
         return i;
@@ -557,6 +564,86 @@ export class Panels {
     this.renderProps();
   }
 
+  /** Encaixe vertical: andar do topo + ajuste (assets, paredes, corredores, áreas). */
+  topFields(o, F) {
+    const doc = this.store.doc;
+    const isAsset = o.type === 'asset';
+    const baseY = isAsset ? worldTransform(o, doc, this.app.vp.ctx.levelY).y : this.app.vp.ctx.levelY(o.levelId);
+    const above = Object.fromEntries(doc.levels.filter((l) => l.elevation > baseY + 1e-3)
+      .sort((a, b) => a.elevation - b.elevation).map((l) => [l.id, `${l.name} (${l.elevation} m)`]));
+    const h = isAsset ? this.assetHeightOf(o) : wallHeightOf(o);
+    const n = objectLevelIds(o, doc).size;
+    return [
+      F({ key: 'topLevelId', label: 'Vai até o andar', type: 'select', options: { '': '— altura livre —', ...above }, tip: 'O topo encaixa na altura do andar escolhido e acompanha se ele mudar' }),
+      F({ key: 'topOffset', label: 'Ajuste no topo (m)', type: 'number', step: 0.25, show: (x) => !!x.topLevelId }),
+      el('p', { class: 'info' }, o.topLevelId
+        ? `Altura ${(+h).toFixed(2)} m · aparece em ${n} andares. Arraste a alça do topo para trocar de andar (Alt solta o ímã).`
+        : 'Arraste a alça do topo: a altura encaixa em cada andar (Alt solta o ímã).'),
+    ];
+  }
+
+  /** Prender um asset a outro: ele passa a andar, girar e subir junto com o pai. */
+  attachFields(o) {
+    const doc = this.store.doc;
+    const blocked = withDescendants(doc, [o.id]);
+    const parents = Object.fromEntries(doc.objects.filter((x) => x.type === 'asset' && !blocked.has(x.id)).map((x) => [x.id, x.name]));
+    const sel = el('select', { id: 'attach-parent' }, el('option', { value: '' }, '— solto —'),
+      ...Object.entries(parents).map(([v, label]) => el('option', { value: v, selected: v === o.parentId }, label)));
+    sel.addEventListener('change', () => this.attach(o.id, sel.value || null));
+    const kids = doc.objects.filter((x) => x.parentId === o.id);
+    const out = [el('div', { class: 'field field-select' }, el('label', { for: 'attach-parent' }, 'Preso a'), sel)];
+    if (o.parentId) out.push(el('p', { class: 'info' }, 'Posição, altura e rotação são relativas ao objeto pai: ele carrega este junto. Arraste a alça da base para subir ou descer (encaixa nos andares e no topo do pai).'));
+    if (kids.length) {
+      out.push(el('div', { class: 'attach-list' }, el('span', { class: 'muted' }, 'Presos aqui:'),
+        ...kids.map((k) => el('button', { class: 'btn ghost small', type: 'button', onclick: () => this.store.select(k.id) }, k.name))));
+    }
+    out.push(el('div', { class: 'props-actions' },
+      el('button', { class: 'btn small', type: 'button', onclick: () => this.addAttachedPlatform(o.id), 'data-tip': 'Plataforma presa a este objeto, entre os andares' }, '+ Plataforma presa')));
+    return out;
+  }
+
+  assetHeightOf(o) {
+    return this.app.vp.objects.get(o.id)?.userData.height ?? assetHeight(o, this.app.vp.ctx.levelY);
+  }
+
+  /** Prende/solta mantendo o objeto no mesmo lugar do mundo. */
+  attach(id, parentId) {
+    this.store.mutate((d) => {
+      const o = d.objects.find((x) => x.id === id);
+      if (!o) return;
+      const levelY = (lid) => d.levels.find((l) => l.id === lid)?.elevation ?? 0;
+      const w = worldTransform(o, d, levelY);
+      const p = parentId ? d.objects.find((x) => x.id === parentId) : null;
+      if (p) {
+        const pw = worldTransform(p, d, levelY);
+        const loc = toParentLocal(pw, w.x, w.z);
+        Object.assign(o, { parentId, x: loc.x, z: loc.z, y: w.y - pw.y, rotY: w.rotY - pw.rotY, levelId: p.levelId });
+      } else {
+        Object.assign(o, { parentId: null, x: w.x, z: w.z, rotY: w.rotY, y: w.y - levelY(o.levelId) });
+      }
+    }, { ids: [id], structure: true });
+    this.renderProps();
+  }
+
+  /** Cria uma plataforma presa na frente do objeto, no meio do primeiro vão entre andares. */
+  addAttachedPlatform(parentId) {
+    const doc = this.store.doc;
+    const p = this.store.get(parentId);
+    if (!p) return;
+    const fp = this.app.vp.objects.get(parentId)?.userData.footprint || { x0: -0.5, x1: 0.5, z0: -0.5, z1: 0.5 };
+    const h = suggestChildHeight(p, doc);
+    const width = Math.max(1, Math.min(4, (fp.x1 - fp.x0) * 0.6));
+    const depth = 1.4, thick = 0.2;
+    const n = doc.objects.filter((x) => x.parentId === parentId).length + 1;
+    // 'platform' é uma laje 4 x 0,4 x 4
+    const c = makeObject('asset', {
+      name: `Plataforma ${n} (${p.name})`, kind: 'platform', color: p.color, levelId: p.levelId, parentId,
+      x: (fp.x0 + fp.x1) / 2, z: fp.z1 + depth / 2, y: Math.max(0, h - thick), rotY: 0,
+      scale: { x: width / 4, y: thick / 0.4, z: depth / 4 },
+    });
+    this.store.addObject(c);
+  }
+
   /** ids do grupo de um objeto (ou só ele). */
   groupIds(id) {
     const o = this.store.get(id);
@@ -572,7 +659,7 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {
@@ -581,6 +668,7 @@ export class Panels {
         setByPath(t, key, value);
         if (t.points && /^(width|smooth|walls\.)/.test(key)) markEdited(d, t);
         if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
+        if (key === 'topLevelId' && !value) t.topOffset = 0;
         if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
       }
     }, { ids: targets, record, structure: (structural || key === 'groupId' || key.startsWith('joins')) && final });

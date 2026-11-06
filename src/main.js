@@ -371,7 +371,21 @@ class App {
     c.name = `${o.name} cópia`;
     if (c.points) c.points = c.points.map(({ att, ...p }) => ({ ...p, x: p.x + 2, z: p.z + 2 }));
     else { c.x += 2; c.z += 2; }
-    this.store.addObject(c);
+    // o que está preso no original ganha uma cópia presa na cópia
+    const kids = [];
+    const copyKids = (fromId, toId) => {
+      for (const k of this.store.doc.objects.filter((x) => x.parentId === fromId)) {
+        const kc = deepClone(k);
+        kc.id = uid(k.type.slice(0, 3));
+        kc.parentId = toId;
+        kids.push(kc);
+        copyKids(k.id, kc.id);
+      }
+    };
+    copyKids(o.id, c.id);
+    if (kids.length) this.store.mutate((d) => { d.objects.push(c, ...kids); }, { ids: [c.id], structure: true });
+    if (kids.length) this.store.select(c.id);
+    else this.store.addObject(c);
   }
 
   /**

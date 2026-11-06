@@ -4,6 +4,7 @@ import { sampleDoc } from './sample.js';
 import { debounce, deepClone } from './util.js';
 import { syncLinks, markEdited } from './builders/corridorPath.js';
 import { syncAttachments } from './editor/polar.js';
+import { syncVertical, withDescendants } from './levels.js';
 
 const STORAGE_KEY = 'levedit.doc.v1';
 const MAX_HISTORY = 120;
@@ -57,6 +58,8 @@ export class Store extends EventTarget {
     fn(this.doc);
     syncLinks(this.doc);
     syncAttachments(this.doc); // paredes presas acompanham a origem
+    syncVertical(this.doc); // alturas presas a andares e filhos no andar do pai
+    if (ids) ids = [...withDescendants(this.doc, ids)]; // quem está preso é reconstruído junto
     this.emit({ ids, all, structure });
     this._autosave();
   }
@@ -135,11 +138,12 @@ export class Store extends EventTarget {
   }
 
   removeObject(id) {
+    const gone = withDescendants(this.doc, [id]); // o que está preso vai junto
     this.mutate((d) => {
-      d.objects = d.objects.filter((o) => o.id !== id);
+      d.objects = d.objects.filter((o) => !gone.has(o.id));
       for (const o of d.objects) if (o.pathId === id) o.pathId = null;
-    }, { ids: [id], structure: true });
-    this.multi.delete(id);
-    if (this.selection === id) this.select(null);
+    }, { ids: [...gone], structure: true });
+    for (const g of gone) this.multi.delete(g);
+    if (gone.has(this.selection)) this.select(null);
   }
 }

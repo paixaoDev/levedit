@@ -676,3 +676,6 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
   body.touch .tool-btn { width: 40px; height: 40px; }
   .panel.left, .panel.right { height: 58dvh; }
 }
+
+/* objetos presos a outro objeto */
+.attach-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0 2px; font-size: 12px; }
