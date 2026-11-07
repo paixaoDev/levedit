@@ -466,14 +466,19 @@ class App {
 
   fileAction(act) {
     switch (act) {
-      case 'new':
-        if (window.confirm('Começar um level vazio? (o atual pode ser recuperado com Ctrl+Z)')) {
-          const prev = JSON.stringify(this.store.doc);
-          this.store.load(emptyDoc());
-          this.store.undoStack.push(prev);
-          this.vp.frameAll();
-        }
+      case 'new': {
+        // Sem window.confirm: navegadores que bloqueiam diálogos (ou o "impedir esta
+        // página de abrir diálogos") devolvem false na hora e o botão parecia não fazer nada.
+        // O level anterior continua a um Ctrl+Z de distância.
+        this.tools.cancelDraft();
+        this.tools.setTool('select');
+        const prev = JSON.stringify(this.store.doc);
+        this.store.load(emptyDoc());
+        this.store.undoStack.push(prev);
+        this.vp.frameAll();
+        this.toast('Level vazio criado · Desfazer traz o anterior de volta');
         break;
+      }
       case 'sample': {
         const prev = JSON.stringify(this.store.doc);
         this.store.load(sampleDoc());
