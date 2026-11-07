@@ -2,11 +2,11 @@
 // sem código) e modo avançado (script do level e lista dos scripts de objetos).
 import { el } from './fields.js';
 import { svgIcon, UI_ICONS, TOOL_ICONS } from './icons.js';
-import { BEHAVIORS } from '../model.js';
-import { EVENTS, CONDITIONS, ACTIONS, OPS, GOALS, makeRule, makeStep, targetsFor, varNames, describeRule } from '../logic/schema.js';
+import { BEHAVIORS, itemGroups } from '../model.js';
+import { EVENTS, CONDITIONS, ACTIONS, OPS, GOALS, GROUP, makeRule, makeStep, targetsFor, targetName, varNames, describeRule } from '../logic/schema.js';
 import { SCRIPT_EXAMPLE } from '../logic/script.js';
 
-const TARGET_HINT = { item: 'item', enemy: 'inimigo', zone: 'zona', asset: 'objeto', thing: 'objeto', place: 'lugar', rule: 'regra' };
+const TARGET_HINT = { item: 'item', group: 'grupo', enemy: 'inimigo', zone: 'zona', asset: 'objeto', thing: 'objeto', place: 'lugar', rule: 'regra' };
 
 export class LogicDialog {
   constructor(app) {
@@ -39,8 +39,8 @@ export class LogicDialog {
 
   nameOf(id) {
     if (!id) return '';
-    const o = this.store.get(id);
-    return o ? o.name : (this.logic.rules.find((r) => r.id === id)?.name || '(removido)');
+    const n = targetName(this.store.doc, id);
+    return n === id ? '(removido)' : n;
   }
 
   // ------------------------------------------------------------ desenho
@@ -76,11 +76,15 @@ export class LogicDialog {
       el('div', { class: 'logic-row' },
         el('label', {}, 'Para vencer'), goalSel,
         GOALS[g.type]?.zone ? select({ '': zones.length ? '— escolha a zona —' : '— crie uma zona (Z) —', ...Object.fromEntries(zones.map((z) => [z.id, z.name])) }, g.zoneId || '', (v) => this.edit((l) => { l.goal.zoneId = v || null; })) : null,
-        GOALS[g.type]?.seconds ? numberIn(g.seconds, (v) => this.edit((l) => { l.goal.seconds = v; }), 's') : null),
+        GOALS[g.type]?.seconds ? numberIn(g.seconds, (v) => this.edit((l) => { l.goal.seconds = v; }), 's') : null,
+        GOALS[g.type]?.count ? numberIn(g.count, (v) => this.edit((l) => { l.goal.count = Math.max(1, Math.round(v)); })) : null,
+        GOALS[g.type]?.group ? select(Object.fromEntries(itemGroups(doc).map((x) => [x.id, x.name])), g.group || 'coin', (v) => this.edit((l) => { l.goal.group = v; })) : null),
       el('div', { class: 'logic-row' },
         el('label', {}, 'Tempo limite'), numberIn(L.timeLimit, (v) => this.edit((l) => { l.timeLimit = Math.max(0, v); }), 's'),
         el('span', { class: 'muted' }, '0 = sem limite. Acabou o tempo, perde (ou vence, no modo sobreviver).')),
     ));
+
+    box.append(this.groupsSection());
 
     // regras
     const head = el('div', { class: 'logic-sec-head' },
@@ -94,6 +98,32 @@ export class LogicDialog {
       box.append(el('p', { class: 'logic-empty' }, 'Nenhuma regra ainda. Comece por um modelo, como "Chave abre porta": coloque um Item (I) e uma Porta (asset), e escolha os dois na regra.'));
     }
     for (const r of L.rules) box.append(this.ruleCard(r));
+  }
+
+  /** Grupos de item: os prontos (só leitura) e os criados pelo autor. */
+  groupsSection() {
+    const doc = this.store.doc;
+    const counts = {};
+    for (const o of doc.objects) if (o.type === 'item') counts[o.kind] = (counts[o.kind] || 0) + 1;
+    const chip = (g) => el('span', { class: 'group-chip', style: `--c:${g.color}` }, g.name, counts[g.id] ? el('span', { class: 'muted' }, ` · ${counts[g.id]}`) : null);
+    const custom = (this.logic.groups || []).map((g, i) => {
+      const name = el('input', { class: 'group-name', value: g.name || '', 'aria-label': 'Nome do grupo', spellcheck: 'false' });
+      name.addEventListener('change', () => this.edit((l) => { l.groups[i].name = name.value.trim() || 'Grupo'; }));
+      const color = el('input', { type: 'color', value: g.color || '#9bb57a', 'aria-label': 'Cor do grupo' });
+      color.addEventListener('change', () => this.edit((l) => { l.groups[i].color = color.value; }));
+      return el('span', { class: 'group-chip custom', style: `--c:${g.color}` }, color, name,
+        counts[g.id] ? el('span', { class: 'muted' }, `· ${counts[g.id]}`) : null,
+        el('button', { class: 'icon-btn small', type: 'button', title: 'Excluir grupo', 'aria-label': `Excluir grupo ${g.name}`, onclick: () => this.edit((l) => { l.groups.splice(i, 1); }), html: svgIcon(UI_ICONS.trash || 'M6 6l12 12M18 6L6 18') }));
+    });
+    return el('section', { class: 'logic-groups' },
+      el('div', { class: 'logic-sec-head' },
+        el('span', { class: 'chip-ico', html: svgIcon(TOOL_ICONS.item) }), el('h4', {}, 'Grupos de itens'),
+        el('span', { class: 'muted' }, 'O tipo do item é o grupo dele. Uma regra pode valer para o grupo todo.'),
+        el('button', {
+          class: 'btn small', type: 'button', html: `${svgIcon(UI_ICONS.plus)}<span>Novo grupo</span>`,
+          onclick: () => this.edit((l) => { l.groups.push({ id: `grp_${Date.now().toString(36)}`, name: `Grupo ${l.groups.length + 1}`, color: '#9bb57a' }); }),
+        })),
+      el('div', { class: 'group-chips' }, ...itemGroups(doc).filter((g) => g.preset).map(chip), ...custom));
   }
 
   addRule(props = {}) {
@@ -222,7 +252,7 @@ export class LogicDialog {
   }
 }
 
-const API_REF = `Eventos: on('start'|'pickup'|'kill'|'allKilled'|'enter'|'exit'|'use'|
+const API_REF = `Eventos: on('start'|'pickup'|'break'|'kill'|'allKilled'|'enter'|'exit'|'use'|
         'varChange'|'playerHurt'|'playerDied'|'tick', (alvo, estado) => {})
 Ações:  game.open/close/toggle/show/hide(alvo)   game.spawn/kill(inimigo)
         game.behavior(inimigo, 'idle'|'wander'|'patrol'|'chase'|'guard'|'flee')
@@ -230,14 +260,18 @@ Ações:  game.open/close/toggle/show/hide(alvo)   game.spawn/kill(inimigo)
         game.rotate(objeto, graus, segundos)   game.color(alvo, '#hex')
         game.param('player' | inimigo, 'speed'|'jump'|'gravity'|'damage'..., valor)
         game.push(x, y, z)   game.teleport(lugar)   game.heal(n)   game.damage(n)
-        game.give(item)   game.message(texto, s)   game.win(texto)   game.lose(texto)
-        game.setVar(nome, v)   game.addVar(nome, v)   game.var(nome)   game.has(item)
+        game.message(texto, s)   game.win(texto)   game.lose(texto)
+        game.setVar(nome, v)   game.addVar(nome, v)   game.var(nome)
+Itens:  game.give(item|grupo, n)   game.take(grupo, n)   game.has(item|grupo)
+        game.count('Moeda')   game.kindOf(alvo) → 'coin'   game.hit(caixa, dano)
 Estado: game.state.player {x,y,z,health,params}  .enemies [{name,x,z,alive,health}]
-        .objects [{name,x,y,z,open,hidden}]  .vars  .items  .time
+        .objects [{name,x,y,z,open,hidden}]  .itemsInLevel [{name,kind,hp,broken}]
+        .vars  .items  .groups {coin: 3}  .time
 Tempo:  after(s, fn)   every(s, fn)
 Objeto: no script de um objeto, "me" é ele: me.on('enter', fn), me.open(),
         me.moveTo(x, z), me.param('speed', 9), me.behavior('flee'), me.state()
-Alvos:  nome do objeto como aparece na lista, id, ou 'player'.`;
+Alvos:  nome do objeto como aparece na lista, id, ou 'player'.
+Grupos: 'Moeda', 'Gema', 'Estrela', 'Chave', 'Caixa'... ou os criados em Grupos de itens.`;
 
 // ------------------------------------------------------------ modelos de regra
 const first = (doc, kind, pred = () => true) => targetsFor(kind, doc).find(pred)?.id || null;
@@ -247,7 +281,9 @@ const TEMPLATES = [
   { label: 'Inimigo abre porta', tip: 'Derrotar um inimigo abre uma porta', make: (doc) => ({ name: 'Derrotar abre porta', when: { type: 'kill', target: first(doc, 'enemy') }, if: [], do: [{ type: 'open', target: door(doc) }] }) },
   { label: 'Alavanca (F)', tip: 'Apertar F numa zona abre e fecha uma porta', make: (doc) => ({ name: 'Alavanca', once: false, when: { type: 'use', target: first(doc, 'zone') }, if: [], do: [{ type: 'toggle', target: door(doc) }] }) },
   { label: 'Emboscada', tip: 'Entrar numa zona acorda um inimigo', make: (doc) => ({ name: 'Emboscada', when: { type: 'enter', target: first(doc, 'zone') }, if: [], do: [{ type: 'spawn', target: first(doc, 'enemy', (o) => o.active === false) || first(doc, 'enemy') }, { type: 'message', text: 'Cuidado!', value: 2 }] }) },
-  { label: 'Contador', tip: 'Cada moeda soma 1; com 3, vence', make: () => ({ name: 'Moedas', once: false, when: { type: 'pickup', target: null }, if: [], do: [{ type: 'addVar', target: 'moedas', value: 1 }] }) },
+  { label: 'Moeda vale ponto', tip: 'Qualquer moeda soma 1 ponto', make: () => ({ name: 'Moeda vale ponto', once: false, when: { type: 'pickup', target: `${GROUP}coin` }, if: [], do: [{ type: 'addVar', target: 'pontos', value: 1 }] }) },
+  { label: '5 estrelas vence', tip: 'Com 5 estrelas, passa de fase', make: () => ({ name: '5 estrelas', when: { type: 'pickup', target: `${GROUP}star` }, if: [{ type: 'count', target: `${GROUP}star`, op: '>=', value: 5 }], do: [{ type: 'win', text: 'Você juntou 5 estrelas!' }] }) },
+  { label: 'Caixa quebrada', tip: 'Quebrar qualquer caixa mostra uma mensagem', make: () => ({ name: 'Caixa quebrada', once: false, when: { type: 'break', target: `${GROUP}crate` }, if: [], do: [{ type: 'message', text: 'Crack!', value: 1.5 }] }) },
   { label: 'Ondas', tip: 'Quando todos caem, acorda a próxima onda', make: (doc) => ({ name: 'Próxima onda', when: { type: 'allKilled', target: null }, if: [], do: [{ type: 'wait', value: 2 }, { type: 'spawn', target: first(doc, 'enemy', (o) => o.active === false) }, { type: 'message', text: 'Nova onda!', value: 2 }] }) },
 ];
 

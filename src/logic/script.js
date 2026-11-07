@@ -3,7 +3,7 @@
 // e devolve ações, que passam pelo mesmo executor das regras.
 //
 // API dentro do script:
-//   on('pickup', (alvo, estado) => { ... })     eventos: start, pickup, kill, allKilled,
+//   on('pickup', (alvo, estado) => { ... })     eventos: start, pickup, break, kill, allKilled,
 //                                               enter, exit, use, varChange, playerHurt,
 //                                               playerDied, tick (5x por segundo)
 //   game.open('Porta 1')  game.close  game.toggle  game.show  game.hide
@@ -12,7 +12,10 @@
 //   game.message('Olá', 3)  game.win('texto')  game.lose('texto')
 //   game.heal(20)  game.damage(10)  game.teleport('Zona 1')  game.give('Chave')
 //   game.setVar('pontos', 0)  game.addVar('pontos', 1)  game.var('pontos')
-//   game.has('Chave')  game.state  (player, inimigos, objetos, contadores, itens, tempo)
+//   game.has('Chave')  game.count('Moeda')  game.give('Moeda', 3)  game.take('Moeda', 2)
+//   game.kindOf(alvo) (grupo do item: 'coin', 'star'...)  game.hit('Caixa 1', 10)
+//   game.state  (player, inimigos, objetos, contadores, itens, grupos, tempo)
+// Grupos de item: 'Moeda', 'Gema', 'Estrela'... (o nome ou o id: 'coin', 'gem', 'star').
 //   game.moveTo('Plataforma', x, z, { y, seconds })  game.rotate('Portão', 90, 0.6)
 //   game.color('Caixa 1', '#c0632f')  game.param('player', 'speed', 12)  game.push(0, 12, 0)
 //   after(segundos, fn)  every(segundos, fn)
@@ -27,7 +30,10 @@ const PRELUDE = `
 'use strict';
 const __h = {};
 let __out = [];
-let __state = { time: 0, vars: {}, items: {}, player: {}, enemies: [], objects: [], names: {} };
+let __state = { time: 0, vars: {}, items: {}, groups: {}, kinds: {}, groupNames: {}, player: {}, enemies: [], objects: [], names: {} };
+// grupo de item a partir do nome ou do id ('Moeda', 'moeda', 'coin', 'g:coin'); null se não for grupo
+const __group = (t) => { const s = String(t ?? ''); return s.startsWith('g:') ? s.slice(2) : (__state.groupNames[s.toLowerCase()] || null); };
+const __ref = (t) => { const g = __group(t); return g && !__state.names[t] ? 'g:' + g : t; };
 const on = (ev, fn) => { (__h[ev] ||= []).push(fn); };
 const __push = (a) => { __out.push(a); };
 const __flush = () => { if (__out.length) { postMessage({ kind: 'actions', actions: __out }); __out = []; } };
@@ -50,7 +56,11 @@ const game = {
   heal: (n) => __push({ type: 'heal', value: n }),
   damage: (n) => __push({ type: 'damage', value: n }),
   teleport: (t) => __push({ type: 'teleport', target: t }),
-  give: (t) => __push({ type: 'give', target: t }),
+  give: (t, n = 1) => __push({ type: 'give', target: __ref(t), value: n }),
+  take: (t, n = 1) => __push({ type: 'take', target: __ref(t), value: n }),
+  hit: (t, n) => __push({ type: 'hit', target: t, value: n }),
+  count: (t) => { const g = __group(t); if (g && !__state.names[t]) return __state.groups[g] || 0; return __state.items[t] || __state.items[__state.names[t]] || 0; },
+  kindOf: (t) => __state.kinds[t] || __state.kinds[__state.names[t]] || null,
   moveTo: (t, x, z, o = {}) => __push({ type: 'moveTo', target: t, value: { x: +x, z: +z, y: o.y, seconds: o.seconds } }),
   rotate: (t, deg, seconds) => __push({ type: 'rotate', target: t, value: deg, seconds }),
   color: (t, c) => __push({ type: 'color', target: t, value: String(c) }),
@@ -59,15 +69,16 @@ const game = {
   setVar: (n, v) => { __state.vars[n] = +v || 0; __push({ type: 'setVar', target: n, value: v }); },
   addVar: (n, v = 1) => { __state.vars[n] = (__state.vars[n] || 0) + (+v || 0); __push({ type: 'addVar', target: n, value: v }); },
   var: (n) => __state.vars[n] || 0,
-  has: (t) => (__state.items[t] || __state.items[__state.names[t]] || 0) > 0,
+  has: (t) => game.count(t) > 0,
   get state() { return __state; },
 };
-const __OWN = { zone: ['enter', 'exit', 'use'], item: ['pickup'], enemy: ['kill'], player: ['playerHurt', 'playerDied'] };
+const __OWN = { zone: ['enter', 'exit', 'use'], item: ['pickup', 'break'], enemy: ['kill'], player: ['playerHurt', 'playerDied'] };
 function __obj(info) {
   const id = info.id;
   const me = { id, name: info.name, type: info.type, role: info.role };
   me.on = (ev, fn) => on(ev, (t, s) => { if (ev === 'tick' || t === id || !(__OWN[info.role || info.type] || []).includes(ev)) fn(t, s); });
   for (const k of ['open', 'close', 'toggle', 'show', 'hide', 'spawn', 'kill', 'teleport', 'give']) me[k] = () => game[k](id);
+  me.hit = (n) => game.hit(id, n);
   me.behavior = (b) => game.behavior(id, b);
   me.goTo = (x, z) => game.goTo(id, x, z);
   me.moveTo = (x, z, o) => game.moveTo(id, x, z, o);
@@ -143,8 +154,9 @@ on('start', () => {
 });
 
 on('pickup', (item) => {
+  if (game.kindOf(item) !== 'coin') return; // só moedas contam
   game.addVar('pontos', 1);
-  if (game.var('pontos') >= 3) {
+  if (game.count('Moeda') >= 3) {
     game.open('Porta 1');
     game.message('A porta abriu!');
   }
@@ -191,7 +203,9 @@ me.on('pickup', () => {
   game.open('Porta 1');
   game.spawn('Inimigo 1');
   game.message('Alguém ouviu você...');
-});`,
+});
+// (numa caixa quebrável) ao quebrar, ganha uma estrela de bônus
+me.on('break', () => game.give('Estrela', 1));`,
   zone: `// Zona: alavanca que alterna o portão ao apertar F
 me.on('use', () => {
   game.toggle('Portão');
