@@ -82,7 +82,11 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - Física simples por raycast: sobe degraus, rampas e escadas, colide com paredes e assets.
 
 **Lógica do jogo (botão Lógica)**
-- **Item (I)**: chave, moeda, gema, vida ou orbe. O player pega ao encostar.
+- **Item (I)**: chave, moeda, gema, estrela, vida, orbe, caixa ou vaso. O player pega ao encostar. O tipo do item é
+  o **grupo** dele (dá para criar grupos próprios), e as regras valem para o grupo inteiro: "pegar qualquer Moeda",
+  "ter 5 Estrelas", "gastar 5 moedas", sem precisar de uma regra por item.
+- **Quebráveis**: item com **HP** (caixa e vaso já vêm assim) não é pego; tiro, pulo em cima ou batida de carro tiram
+  HP e, no zero, ele quebra e solta N itens de um grupo (ex.: 3 moedas). Evento "Quebrar um item".
 - **Zona de gatilho (Z)**: caixa invisível no jogo que dispara regras quando o player entra, sai ou aperta **F** nela
   (alavancas, botões, emboscadas).
 - **Modo simples, sem código**: regras *Quando… Se… Então…*. Exemplos: pegar a chave abre a porta, derrotar o chefe
@@ -90,7 +94,8 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
   Eventos, condições (itens, contadores, inimigos vivos, tempo, vida) e ações (abrir/fechar, mostrar/esconder,
   despertar, mudar comportamento, mensagem, contador, teleporte, curar, dano, esperar, vencer, perder).
   Modelos prontos e, nas propriedades de cada objeto, as regras que usam ele.
-- **Modo de jogo**: derrotar todos, chegar numa zona, coletar tudo, sobreviver N segundos ou livre, com tempo limite.
+- **Modo de jogo**: derrotar todos, chegar numa zona, coletar tudo, juntar N de um grupo, sobreviver N segundos ou livre,
+  com tempo limite.
 - **Modo avançado (script)**: JavaScript para o level e para **cada objeto** (player, inimigo, asset, item, zona),
   com `me` sendo o próprio objeto. Recebe eventos (`on('pickup', …)`, `me.on('enter', …)`, `tick`) e manda ações
   (`game.open`, `game.moveTo`, `game.param('player', 'speed', 12)`, `me.behavior('flee')`…). Roda num Web Worker

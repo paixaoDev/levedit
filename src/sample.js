@@ -214,13 +214,21 @@ export function sampleDoc() {
 
   // ------------------------------------------------------------ Lógica do jogo
   // Chave no baú da cripta abre a porta trancada; entrar no salão desperta o
-  // guardião; derrotá-lo vence. Gemas no tesouro somam pontos e dão vida.
+  // guardião; derrotá-lo vence. Regras por grupo: qualquer Gema soma ponto e dá
+  // vida; caixas e vasos quebráveis na Sala das tochas soltam moedas e vida, e
+  // 5 moedas viram vida.
   const key = add('item', { name: 'Chave da cripta', kind: 'key', color: GOLD, levelId: l0.id, x: CX, z: CZ, y: 1.6 });
   const hall = add('zone', { name: 'Entrada do salão', levelId: l0.id, x: 0, z: -28.5, w: 6, d: 4, h: 3 });
   const lever = add('zone', { name: 'Alavanca da antecâmara', levelId: l0.id, x: 5.5, z: -9, w: 2, d: 2, h: 2.5, usable: true, useLabel: 'Puxar alavanca', color: GOLD });
   add('asset', { kind: 'pillar', name: 'Alavanca', levelId: l0.id, x: 5.5, z: -9, color: GOLD, scale: { x: 0.35, y: 0.35, z: 0.35 } });
   const gems = [[1, -2.5, 1], [2, -1, 3], [3, -4.2, -1.5]].map(([i, dx, dz]) =>
     add('item', { name: `Gema ${i}`, kind: 'gem', color: WATER, levelId: l1.id, x: TX + dx, z: TZ + dz, y: 0.8 }));
+  for (const [i, x, z] of [[1, -26, 4], [2, -27.3, 5.3], [3, -25.4, 9.5]]) {
+    add('item', { name: `Caixa quebrável ${i}`, kind: 'crate', color: '#a07a52', levelId: l0.id, x, z, rotY: x * 0.7, hp: 30, dropKind: 'coin', dropCount: 3 });
+  }
+  for (const [i, x, z] of [[1, -31.5, 2], [2, -31.5, 8]]) {
+    add('item', { name: `Vaso ${i}`, kind: 'vase', color: '#b9825e', levelId: l0.id, x, z, hp: 10, dropKind: i === 1 ? 'health' : 'coin', dropCount: i === 1 ? 1 : 2 });
+  }
   const boss = objs.find((o) => o.name === 'Guardião');
   const r = (name, when, actions, extra = {}) => ({ id: `rul_${name.replace(/\W/g, '').toLowerCase()}`, name, enabled: true, once: true, when, if: [], do: actions, ...extra });
   doc.logic.goal = { type: 'rules', zoneId: null, seconds: 60 };
@@ -231,9 +239,11 @@ export function sampleDoc() {
     r('Alavanca abre e fecha', { type: 'use', target: lever.id }, [{ type: 'toggle', target: lockedDoor.id }], { once: false, if: [{ type: 'hasItem', target: key.id }] }),
     r('O guardião desperta', { type: 'enter', target: hall.id }, [{ type: 'spawn', target: boss.id }, { type: 'message', text: 'O guardião despertou!', value: 3 }]),
     r('Vitória', { type: 'kill', target: boss.id }, [{ type: 'wait', value: 1 }, { type: 'win', text: 'Você libertou o Templo das Raízes!' }]),
-    // gemas: cada uma soma um ponto e cura um pouco
-    ...gems.map((g) => r(`${g.name} vale ponto`, { type: 'pickup', target: g.id }, [{ type: 'addVar', target: 'gemas', value: 1 }, { type: 'heal', value: 20 }])),
-    r('Todas as gemas', { type: 'varChange', target: 'gemas' }, [{ type: 'message', text: 'Tesouro completo!', value: 3 }], { if: [{ type: 'var', target: 'gemas', op: '>=', value: 3 }] }),
+    // grupos: uma regra vale para todas as gemas / moedas, sem regra item por item
+    r('Gema dá vida', { type: 'pickup', target: 'g:gem' }, [{ type: 'heal', value: 20 }], { once: false }),
+    r('Todas as gemas', { type: 'pickup', target: 'g:gem' }, [{ type: 'message', text: 'Tesouro completo!', value: 3 }], { if: [{ type: 'count', target: 'g:gem', op: '>=', value: gems.length }] }),
+    r('Primeira caixa', { type: 'break', target: 'g:crate' }, [{ type: 'message', text: 'Caixas e vasos soltam moedas. Junte 5 para ganhar vida!', value: 4 }]),
+    r('5 moedas viram vida', { type: 'pickup', target: 'g:coin' }, [{ type: 'take', target: 'g:coin', value: 5 }, { type: 'heal', value: 50 }, { type: 'message', text: '5 moedas: +50 de vida', value: 2 }], { once: false, if: [{ type: 'count', target: 'g:coin', op: '>=', value: 5 }] }),
   ];
   return doc;
 }

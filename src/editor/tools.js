@@ -1,7 +1,7 @@
 // Ferramentas de edição: seleção/arraste, desenho de curvas (corredor, parede,
 // área), colocação (assets, agentes, escadas) e alças de pontos de controle.
 import * as THREE from 'three';
-import { makeObject, ASSET_KINDS, ITEM_KINDS } from '../model.js';
+import { makeObject, ASSET_KINDS, itemGroups } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
 import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
 import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
@@ -1232,9 +1232,12 @@ export class Tools extends EventTarget {
       });
     }
     if (t === 'item') {
-      const label = ITEM_KINDS[opt.kind] || 'Item';
+      const label = itemGroups(this.store.doc).find((g) => g.id === opt.kind)?.name || 'Item';
       const n = this.store.doc.objects.filter((o) => o.type === 'item' && o.kind === opt.kind).length + 1;
-      return makeObject('item', { name: `${label} ${n}`, kind: opt.kind, color: opt.color, levelId, x: p.x, z: p.z, amount: opt.kind === 'health' ? 25 : 1 });
+      return makeObject('item', {
+        name: `${label} ${n}`, kind: opt.kind, color: opt.color, levelId, x: p.x, z: p.z, amount: opt.kind === 'health' ? 25 : 1,
+        hp: +opt.hp || 0, dropKind: opt.dropKind || 'coin', dropCount: +opt.dropCount || 0,
+      });
     }
     if (t === 'zone') {
       return makeObject('zone', { name: `${opt.usable ? 'Alavanca' : 'Zona'} ${count}`, levelId, x: p.x, z: p.z, w: opt.w, d: opt.d, usable: !!opt.usable, color: opt.usable ? '#d9a441' : '#6d9bb8' });

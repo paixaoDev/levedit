@@ -6,7 +6,7 @@ import { buildSource } from '../src/logic/script.js';
 
 const hostFor = (extra = {}) => {
   const acts = [];
-  return { acts, act: (a) => acts.push(a), isEnemyDead: () => false, enemiesLeft: () => 1, totalItems: () => 2, playerHealth: () => 100, ...extra };
+  return { acts, act: (a) => acts.push(a), isEnemyDead: () => false, enemiesLeft: () => 1, playerHealth: () => 100, ...extra };
 };
 
 test('pegar a chave abre a porta só uma vez', () => {
@@ -56,12 +56,13 @@ test('objetivos: zona, tempo limite e coletar tudo', () => {
   rt.update(5.01);
   assert.equal(rt.ended.win, false);
 
-  h = hostFor();
+  const left = new Set(['a', 'b']);
+  h = hostFor({ itemsLeft: () => left.size });
   rt = new LogicRuntime({ goal: { type: 'collectAll' }, rules: [] }, h);
   rt.start();
-  rt.addItem('a'); rt.addItem('a');
-  assert.equal(rt.ended, null, 'pegar o mesmo item duas vezes não conta');
-  rt.addItem('b');
+  left.delete('a'); rt.addItem('a');
+  assert.equal(rt.ended, null, 'ainda falta um item');
+  left.delete('b'); rt.addItem('b');
   assert.equal(rt.ended.win, true);
 });
 
@@ -115,4 +116,43 @@ test('script do level e de objeto compilam juntos', () => {
   handler({ data: { kind: 'event', type: 'use', target: 'z' } });
   const acts = posted.filter((m) => m.kind === 'actions').flatMap((m) => m.actions);
   assert.deepEqual(acts, [{ type: 'open', target: 'Porta' }, { type: 'toggle', target: 'z' }]);
+});
+
+test('regras por grupo de item: qualquer moeda, quantidade e gastar', () => {
+  const kinds = { m1: 'coin', m2: 'coin', m3: 'coin', s1: 'star', k: 'key' };
+  const rules = [
+    makeRule({ id: 'ponto', once: false, when: { type: 'pickup', target: 'g:coin' }, do: [{ type: 'addVar', target: 'pontos', value: 1 }] }),
+    makeRule({ id: 'tres', when: { type: 'pickup', target: 'g:coin' }, if: [{ type: 'count', target: 'g:coin', op: '>=', value: 3 }], do: [{ type: 'open', target: 'porta' }] }),
+    makeRule({ id: 'loja', once: false, when: { type: 'use', target: 'balcao' }, if: [{ type: 'count', target: 'g:coin', op: '>=', value: 2 }], do: [{ type: 'take', target: 'g:coin', value: 2 }, { type: 'give', target: 'g:star', value: 1 }] }),
+    makeRule({ id: 'quebrou', once: false, when: { type: 'break', target: 'g:crate' }, do: [{ type: 'addVar', target: 'caixas', value: 1 }] }),
+  ];
+  const h = hostFor({ itemKind: (id) => kinds[id] || (id.startsWith('cx') ? 'crate' : null) });
+  const rt = new LogicRuntime({ goal: { type: 'rules' }, rules }, h);
+  rt.start();
+  rt.addItem('k');
+  assert.equal(rt.getVar('pontos'), 0, 'chave não é moeda');
+  rt.addItem('m1'); rt.addItem('m2');
+  assert.equal(rt.getVar('pontos'), 2);
+  assert.equal(h.acts.length, 0);
+  rt.addItem('m3');
+  assert.deepEqual(h.acts.map((a) => a.type), ['open']);
+  assert.equal(rt.count('g:coin'), 3);
+  rt.emit('use', 'balcao');
+  assert.equal(rt.count('g:coin'), 1, 'gastou 2 moedas');
+  assert.equal(rt.count('g:star'), 1, 'ganhou 1 estrela');
+  assert.equal(rt.count('m1') + rt.count('m2') + rt.count('m3'), 1, 'os itens também saem');
+  rt.emit('use', 'balcao');
+  assert.equal(rt.count('g:star'), 1, 'sem moedas suficientes não troca');
+  rt.emit('break', 'cx1'); rt.emit('break', 'cx2'); rt.emit('break', 'm9');
+  assert.equal(rt.getVar('caixas'), 2);
+});
+
+test('objetivo: juntar N de um grupo', () => {
+  const h = hostFor({ itemKind: (id) => (id.startsWith('s') ? 'star' : 'coin') });
+  const rt = new LogicRuntime({ goal: { type: 'collectGroup', group: 'star', count: 3 }, rules: [] }, h);
+  rt.start();
+  rt.addItem('s1'); rt.addItem('c1'); rt.addItem('s2');
+  assert.equal(rt.ended, null);
+  rt.addItem('s3');
+  assert.equal(rt.ended.win, true);
 });
