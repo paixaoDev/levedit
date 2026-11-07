@@ -3,7 +3,8 @@
 // oeste, antecâmara com porta trancada, salão do guardião e um andar de cima
 // (mezanino, passarela e câmara do tesouro) que desce por escadaria até o chefe.
 // Mostra salas circulares, salas sobrepostas fundidas, paredes em arco, portas
-// automáticas, tetos, luzes, escada entre níveis, assets, player e inimigos.
+// automáticas, tetos, luzes, escada entre níveis, assets, player e inimigos, e a
+// lógica do jogo: chave abre porta, alavanca, zona que desperta o chefe e vitória.
 import { emptyDoc, makeLevel, makeObject } from './model.js';
 import { circlePoints } from './editor/polar.js';
 
@@ -152,7 +153,7 @@ export function sampleDoc() {
     light('Tocha da antecâmara', l0.id, x * 1.5, -9.5, { intensity: 7, range: 10 });
   }
   corridor('Passagem do guardião', l0.id, [{ x: 0, z: -18 }, { x: 0, z: -25.5 }], { width: 4.5 });
-  asset('door', 'Porta trancada', l0.id, 0, -21.5, { color: '#8a7a62', scale: { x: 2.4, y: 1.3, z: 1.4 } });
+  const lockedDoor = asset('door', 'Porta trancada', l0.id, 0, -21.5, { color: '#8a7a62', scale: { x: 2.4, y: 1.3, z: 1.4 } });
 
   // Salão do guardião: sala do chefe circular, alcovas fundidas e anéis em arco
   const BX = 0, BZ = -38, BR = 13.5;
@@ -208,6 +209,31 @@ export function sampleDoc() {
   add('agent', {
     name: 'Guardião', role: 'enemy', mode: 'shooter', behavior: 'chase', levelId: l0.id, x: BX, z: BZ - 2, rotY: 0, color: '#2f2a24',
     params: { speed: 2.4, range: 22, fireRate: 1.6, damage: 15, health: 400, projectileSpeed: 16, accuracy: 0.85 },
+    active: false, // dorme até o player entrar no salão
   });
+
+  // ------------------------------------------------------------ Lógica do jogo
+  // Chave no baú da cripta abre a porta trancada; entrar no salão desperta o
+  // guardião; derrotá-lo vence. Gemas no tesouro somam pontos e dão vida.
+  const key = add('item', { name: 'Chave da cripta', kind: 'key', color: GOLD, levelId: l0.id, x: CX, z: CZ, y: 1.6 });
+  const hall = add('zone', { name: 'Entrada do salão', levelId: l0.id, x: 0, z: -28.5, w: 6, d: 4, h: 3 });
+  const lever = add('zone', { name: 'Alavanca da antecâmara', levelId: l0.id, x: 5.5, z: -9, w: 2, d: 2, h: 2.5, usable: true, useLabel: 'Puxar alavanca', color: GOLD });
+  add('asset', { kind: 'pillar', name: 'Alavanca', levelId: l0.id, x: 5.5, z: -9, color: GOLD, scale: { x: 0.35, y: 0.35, z: 0.35 } });
+  const gems = [[1, -2.5, 1], [2, -1, 3], [3, -4.2, -1.5]].map(([i, dx, dz]) =>
+    add('item', { name: `Gema ${i}`, kind: 'gem', color: WATER, levelId: l1.id, x: TX + dx, z: TZ + dz, y: 0.8 }));
+  const boss = objs.find((o) => o.name === 'Guardião');
+  const r = (name, when, actions, extra = {}) => ({ id: `rul_${name.replace(/\W/g, '').toLowerCase()}`, name, enabled: true, once: true, when, if: [], do: actions, ...extra });
+  doc.logic.goal = { type: 'rules', zoneId: null, seconds: 60 };
+  doc.logic.rules = [
+    r('Começo', { type: 'start' }, [{ type: 'message', text: 'Ache a chave na cripta da água (leste) para abrir a porta do guardião.', value: 5 }]),
+    r('Chave abre a porta', { type: 'pickup', target: key.id }, [{ type: 'open', target: lockedDoor.id }, { type: 'message', text: 'Ouviu-se uma porta pesada se abrir ao norte…', value: 4 }]),
+    r('Porta ainda trancada', { type: 'use', target: lever.id }, [{ type: 'message', text: 'A alavanca está emperrada. Talvez uma chave…', value: 3 }], { once: false, if: [{ type: 'noItem', target: key.id }] }),
+    r('Alavanca abre e fecha', { type: 'use', target: lever.id }, [{ type: 'toggle', target: lockedDoor.id }], { once: false, if: [{ type: 'hasItem', target: key.id }] }),
+    r('O guardião desperta', { type: 'enter', target: hall.id }, [{ type: 'spawn', target: boss.id }, { type: 'message', text: 'O guardião despertou!', value: 3 }]),
+    r('Vitória', { type: 'kill', target: boss.id }, [{ type: 'wait', value: 1 }, { type: 'win', text: 'Você libertou o Templo das Raízes!' }]),
+    // gemas: cada uma soma um ponto e cura um pouco
+    ...gems.map((g) => r(`${g.name} vale ponto`, { type: 'pickup', target: g.id }, [{ type: 'addVar', target: 'gemas', value: 1 }, { type: 'heal', value: 20 }])),
+    r('Todas as gemas', { type: 'varChange', target: 'gemas' }, [{ type: 'message', text: 'Tesouro completo!', value: 3 }], { if: [{ type: 'var', target: 'gemas', op: '>=', value: 3 }] }),
+  ];
   return doc;
 }

@@ -35,6 +35,7 @@
       <button class="icon-btn" id="btn-undo" data-tip="Desfazer" data-key="Ctrl Z" aria-label="Desfazer"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
       <button class="icon-btn" id="btn-redo" data-tip="Refazer" data-key="Ctrl ⇧ Z" aria-label="Refazer"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <button class="icon-btn toggle-btn" id="btn-snap" data-tip="Ímã na grade" data-key="G" aria-label="Ímã na grade"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 10h16M4 15h16M10 4v16M15 4v16" opacity=".55"/></svg></button>
+      <button class="btn logic-btn" id="btn-logic" data-tip="Regras e scripts do jogo" aria-label="Lógica do jogo"><svg viewBox="0 0 24 24"><path d="M4 5h6v5H4z M14 14h6v5h-6z M7 10v4a2 2 0 0 0 2 2h5 M17 14V9a2 2 0 0 0-2-2h-5"/></svg><span>Lógica</span></button>
       <div class="menu">
         <button class="icon-btn" id="btn-file" data-tip="Arquivo" aria-label="Arquivo" aria-haspopup="menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
         <div class="menu-pop" id="menu-file" role="menu" hidden>
@@ -112,7 +113,8 @@
       <div><kbd>A</kbd> Área</div><div><kbd>W</kbd> Parede</div>
       <div><kbd>S</kbd> Escada/rampa</div><div><kbd>O</kbd> Asset</div>
       <div><kbd>P</kbd> Agente</div><div><kbd>T</kbd> 3D / Planta</div>
-      <div><kbd>L</kbd> Ponto de luz</div><div></div>
+      <div><kbd>L</kbd> Ponto de luz</div><div><kbd>I</kbd> Item coletável</div>
+      <div><kbd>Z</kbd> Zona de gatilho</div><div></div>
     </div>
     <h4>Edição</h4>
     <div class="help-grid">
@@ -125,6 +127,9 @@
     <h4>No celular</h4>
     <p><b>Testar no celular:</b> joystick na esquerda (aparece onde o dedo toca); FPS tem Atirar e Pular e mira arrastando a tela; Plataforma tem Pular e gira a câmera arrastando; Carro tem volante, Acelerar, Ré e Drift.</p>
     <p>Um dedo gira a câmera (na Planta, move) · dois dedos movem e dão zoom com pinça · toque seleciona, põe pontos e coloca objetos. Arraste os quadrados para mover nós; <b>segure</b> um quadrado para removê-lo ou uma bolinha para resetar a largura. Para mover um corredor, parede ou área selecionado, segure o dedo nele e arraste. A barra embaixo da cena tem Concluir, Desfazer ponto, Duplicar, Excluir e "Vários" (somar à seleção).</p>
+    <h4>Lógica do jogo</h4>
+    <p><b>Modo simples:</b> no botão Lógica, crie regras "Quando… Se… Então…" sem código: pegar a chave abre a porta, derrotar o chefe vence o level, entrar numa zona acorda inimigos, apertar <kbd>F</kbd> numa alavanca abre o portão. Escolha também o modo de jogo (derrotar todos, chegar numa zona, coletar tudo, sobreviver) e um tempo limite.</p>
+    <p><b>Modo avançado:</b> scripts em JavaScript para o level ou para cada objeto (player, inimigo, asset, item, zona), com "me" sendo o próprio objeto. Rodam isolados e só no modo Testar.</p>
     <h4>Câmera</h4>
     <p>Arraste no vazio (ou com o botão direito) para girar · botão do meio ou Shift+arrastar para mover · roda para zoom. Na Planta, qualquer botão move.</p>
     <h4>Curvas</h4>
@@ -132,6 +137,8 @@
     <h4>Junções e grupos</h4>
     <p>Comece ou termine um corredor sobre outro: ele ramifica e a parede do outro abre com porta. Um anel laranja mostra onde a ponta vai se conectar. Um corredor que termina dentro ou na borda de uma área abre porta nela, e áreas encostadas ganham porta na parede em comum. Selecione corredores com Shift+clique e aperte Ctrl+G para que compartilhem estilo e se conectem.</p>
   </dialog>
+
+  <dialog id="logic-dialog" class="dialog logic-dialog" aria-label="Lógica do jogo"></dialog>
 
   <input type="file" id="file-json" accept=".json,application/json" hidden />
   <input type="file" id="file-model" accept=".glb,.gltf" hidden />

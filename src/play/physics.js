@@ -30,6 +30,21 @@ export class World {
     this._box = new THREE.Box3();
   }
 
+  /** Liga/desliga a colisão de tudo dentro de root (porta abrindo, objeto escondido). */
+  setEnabled(root, on) {
+    root.updateMatrixWorld(true);
+    root.traverse((o) => {
+      if (!o.isMesh || !o.userData.collider || o.userData.editorOnly) return;
+      const i = this.meshes.indexOf(o);
+      if (i >= 0) { this.meshes.splice(i, 1); this.boxes.splice(i, 1); }
+      if (on) {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        this.meshes.push(o);
+        this.boxes.push(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));
+      }
+    });
+  }
+
   near(pos, r, yLo, yHi) {
     const b = this._box;
     b.min.set(pos.x - r, yLo, pos.z - r);

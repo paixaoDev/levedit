@@ -77,7 +77,25 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 - Inimigos: **Atirador FPS** (atira projéteis quando te vê), **Arcade** (persegue e causa dano por contato) e
   **Carro** (persegue/patrulha e atropela). Comportamentos: parado, vagar, patrulhar um caminho (corredor/parede/área)
   ou perseguir.
+- Mais comportamentos: **guardar posição** (persegue só dentro de um raio e volta) e **fugir do player**.
+  Um inimigo pode começar **dormindo** (invisível) até uma regra despertá-lo.
 - Física simples por raycast: sobe degraus, rampas e escadas, colide com paredes e assets.
+
+**Lógica do jogo (botão Lógica)**
+- **Item (I)**: chave, moeda, gema, vida ou orbe. O player pega ao encostar.
+- **Zona de gatilho (Z)**: caixa invisível no jogo que dispara regras quando o player entra, sai ou aperta **F** nela
+  (alavancas, botões, emboscadas).
+- **Modo simples, sem código**: regras *Quando… Se… Então…*. Exemplos: pegar a chave abre a porta, derrotar o chefe
+  vence, entrar no salão desperta o guardião, a cada 10 s nasce um inimigo, com 3 moedas a ponte aparece.
+  Eventos, condições (itens, contadores, inimigos vivos, tempo, vida) e ações (abrir/fechar, mostrar/esconder,
+  despertar, mudar comportamento, mensagem, contador, teleporte, curar, dano, esperar, vencer, perder).
+  Modelos prontos e, nas propriedades de cada objeto, as regras que usam ele.
+- **Modo de jogo**: derrotar todos, chegar numa zona, coletar tudo, sobreviver N segundos ou livre, com tempo limite.
+- **Modo avançado (script)**: JavaScript para o level e para **cada objeto** (player, inimigo, asset, item, zona),
+  com `me` sendo o próprio objeto. Recebe eventos (`on('pickup', …)`, `me.on('enter', …)`, `tick`) e manda ações
+  (`game.open`, `game.moveTo`, `game.param('player', 'speed', 12)`, `me.behavior('flee')`…). Roda num Web Worker
+  isolado, sem acesso à página, só no modo Testar.
+- Assets podem começar **escondidos** ou **abertos**; "abrir" afunda o objeto no chão e libera a passagem.
 
 **Arquivo**
 - Autosave no navegador, desfazer/refazer, salvar/abrir `.level.json`, exportar a cena em **GLB** e capturar **PNG**.
@@ -93,7 +111,8 @@ Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Sourc
 | S | Escada/rampa | Del | Excluir |
 | O | Asset | Ctrl+D | Duplicar |
 | P | Agente | Ctrl+Z / Ctrl+Shift+Z | Desfazer / refazer |
-| L | Luz | | |
+| L | Luz | I | Item |
+| Z | Zona de gatilho | F (no jogo) | Usar zona |
 | PgUp/PgDn | Trocar nível | Ctrl+Enter | Testar |
 | Shift+clique | Somar à seleção | Ctrl+G / Ctrl+Shift+G | Agrupar / desagrupar |
 
@@ -108,12 +127,13 @@ src/builders/              geração procedural: corredores, paredes, áreas, de
 src/render/                material único + contorno CAD, pontilhado, geometrias (faixas, lajes), iluminação
 src/editor/                viewport, câmeras, grid e ferramentas
 src/play/                  física por raycast, player e inimigos
+src/logic/                 regras (schema + runtime testável sem Three.js) e scripts em Web Worker
 src/ui/                    painéis de níveis, objetos e propriedades
 vendor/                    Three.js r160 (local, sem CDN)
 tests/                     testes da matemática de curvas (node --test tests/*.test.mjs)
 ```
 
-O formato do level é JSON simples (`levels`, `objects`, `settings`, `customAssets`), fácil de ler em qualquer engine.
+O formato do level é JSON simples (`levels`, `objects`, `settings`, `customAssets`, `logic`), fácil de ler em qualquer engine.
 
 ## Contribuindo
 

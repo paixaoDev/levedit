@@ -1,7 +1,7 @@
 // Ferramentas de edição: seleção/arraste, desenho de curvas (corredor, parede,
 // área), colocação (assets, agentes, escadas) e alças de pontos de controle.
 import * as THREE from 'three';
-import { makeObject, ASSET_KINDS } from '../model.js';
+import { makeObject, ASSET_KINDS, ITEM_KINDS } from '../model.js';
 import { buildObject, makeContext } from '../builders/index.js';
 import { nodeHalf, halfAt, attachEnd, detachEnd, findAttachTarget, findAreaTarget, widthLimit, obstacleLines, nodeCollisions, hasAgents, pushCorridor, markEdited } from '../builders/corridorPath.js';
 import { computeFrames, offsetPoints, samplePath, segmentArc, arcPoint, hasArcs, expandArcs, closestOnPolyline } from '../math/curve.js';
@@ -11,7 +11,7 @@ import { snap, lerp, smoothstep, deepClone } from '../util.js';
 import { snapTopToLevels, snapVertical, setWallHeight, wallHeightOf, worldTransform, toParentLocal } from '../levels.js';
 
 const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
-const MOVABLE = new Set(['asset', 'agent', 'connector', 'light']);
+const MOVABLE = new Set(['asset', 'agent', 'connector', 'light', 'item', 'zone']);
 
 export const TOOL_INFO = {
   select: { label: 'Selecionar', key: 'V', touch: 'Toque para selecionar · 1 dedo gira · 2 dedos movem e dão zoom', hint: 'Clique para selecionar · Shift soma · arraste para mover · Ctrl+G agrupa corredores' },
@@ -21,6 +21,8 @@ export const TOOL_INFO = {
   connector: { label: 'Escada/Rampa', key: 'S', touch: 'Toque para posicionar · liga este andar ao de cima', hint: 'Clique para posicionar · R gira · liga este andar ao de cima' },
   asset: { label: 'Asset', key: 'O', touch: 'Escolha o asset em Propriedades e toque na cena para colocar', hint: 'Escolha o asset no painel e clique para colocar · Shift mantém a ferramenta' },
   agent: { label: 'Agente', key: 'P', touch: 'Escolha player ou inimigo em Propriedades e toque para colocar', hint: 'Escolha player ou inimigo no painel e clique para colocar' },
+  item: { label: 'Item', key: 'I', touch: 'Escolha o item em Propriedades e toque para colocar', hint: 'Clique para colocar um item coletável (chave, moeda, vida...) · Shift mantém a ferramenta' },
+  zone: { label: 'Zona de gatilho', key: 'Z', touch: 'Toque para colocar uma zona · regras disparam quando o player entra', hint: 'Clique para colocar uma zona: quando o player entra, sai ou aperta F nela, as regras disparam' },
   light: { label: 'Luz', key: 'L', touch: 'Toque para colocar um ponto de luz', hint: 'Clique para colocar um ponto de luz · aparece com a luz Dia, Entardecer ou Noite' },
 };
 
@@ -40,6 +42,8 @@ export class Tools extends EventTarget {
       agent: { role: 'player', mode: 'fps' },
       connector: { style: 'stairs' },
       light: { color: '#ffd9a0', intensity: 8, range: 14, y: 2.4 },
+      item: { kind: 'key', color: '#d9a441' },
+      zone: { w: 4, d: 4, usable: false },
     };
     this.draft = null;
     this.drag = null;
@@ -198,7 +202,7 @@ export class Tools extends EventTarget {
         this.store.select(hit.id);
         const o = this.store.get(hit.id);
         const y = o.type === 'asset' ? (this.vp.objects.get(o.id)?.userData.base ?? this.vp.ctx.levelY(o.levelId))
-          : o.type === 'agent' || o.type === 'light' ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
+          : ['agent', 'light', 'item', 'zone'].includes(o.type) ? this.vp.ctx.levelY(o.levelId) : hit.point.y;
         const start = this.vp.groundPoint(ndc, y);
         if (start) {
           this._setControls(false);
@@ -1226,6 +1230,14 @@ export class Tools extends EventTarget {
         color: isPlayer ? '#4a6a8f' : opt.mode === 'arcade' ? '#b56b7a' : '#c0632f',
         behavior: isPlayer ? 'idle' : opt.mode === 'car' ? 'chase' : 'wander',
       });
+    }
+    if (t === 'item') {
+      const label = ITEM_KINDS[opt.kind] || 'Item';
+      const n = this.store.doc.objects.filter((o) => o.type === 'item' && o.kind === opt.kind).length + 1;
+      return makeObject('item', { name: `${label} ${n}`, kind: opt.kind, color: opt.color, levelId, x: p.x, z: p.z, amount: opt.kind === 'health' ? 25 : 1 });
+    }
+    if (t === 'zone') {
+      return makeObject('zone', { name: `${opt.usable ? 'Alavanca' : 'Zona'} ${count}`, levelId, x: p.x, z: p.z, w: opt.w, d: opt.d, usable: !!opt.usable, color: opt.usable ? '#d9a441' : '#6d9bb8' });
     }
     if (t === 'light') {
       return makeObject('light', { name: `Luz ${count}`, levelId, x: p.x, z: p.z, color: opt.color, intensity: opt.intensity, range: opt.range, y: opt.y });

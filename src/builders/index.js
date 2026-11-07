@@ -38,6 +38,8 @@ export function buildObject(obj, ctx) {
     case 'asset': g = buildAsset(obj, ctx); break;
     case 'agent': g = buildAgent(obj, ctx); break;
     case 'light': g = buildLight(obj, ctx); break;
+    case 'item': g = buildItem(obj, ctx); break;
+    case 'zone': g = buildZone(obj, ctx); break;
     default: g = new THREE.Group();
   }
   g.userData.objId = obj.id;
@@ -487,6 +489,91 @@ function buildLight(o, ctx) {
   base.userData.editorOnly = true;
   group.add(base);
   group.position.set(o.x, y0, o.z);
+  group.traverse((m) => { m.userData.collider = false; });
+  return group;
+}
+
+// ---------------------------------------------------------------- itens e zonas
+
+/** Forma de um item coletável (gira e flutua no modo jogo). */
+export function buildItemBody(o) {
+  const g = new THREE.Group();
+  const c = o.color;
+  const add = (geo, color, x = 0, y = 0, z = 0, rx = 0) => {
+    const m = makeMesh(geo, color, { collider: false, threshold: 35 });
+    m.position.set(x, y, z);
+    m.rotation.x = rx;
+    g.add(m);
+    return m;
+  };
+  switch (o.kind) {
+    case 'key':
+      add(sharedGeometry('item-key-ring', () => new THREE.TorusGeometry(0.2, 0.06, 8, 20)), c, 0, 0.22, 0);
+      add(sharedGeometry('item-key-shaft', () => new THREE.BoxGeometry(0.08, 0.5, 0.08)), c, 0, -0.2, 0);
+      add(sharedGeometry('item-key-bit', () => new THREE.BoxGeometry(0.16, 0.07, 0.08)), c, 0.08, -0.38, 0);
+      add(sharedGeometry('item-key-bit2', () => new THREE.BoxGeometry(0.12, 0.07, 0.08)), c, 0.06, -0.26, 0);
+      break;
+    case 'coin':
+      add(sharedGeometry('item-coin', () => new THREE.CylinderGeometry(0.3, 0.3, 0.07, 24)), c, 0, 0, 0, Math.PI / 2);
+      break;
+    case 'gem':
+      add(sharedGeometry('item-gem', () => new THREE.OctahedronGeometry(0.32, 0)), c).scale.set(0.8, 1.2, 0.8);
+      break;
+    case 'health':
+      add(sharedGeometry('item-hp-a', () => new THREE.BoxGeometry(0.5, 0.17, 0.17)), c);
+      add(sharedGeometry('item-hp-b', () => new THREE.BoxGeometry(0.17, 0.5, 0.17)), c);
+      break;
+    default:
+      add(sharedGeometry('item-orb', () => new THREE.IcosahedronGeometry(0.3, 1)), c);
+  }
+  return g;
+}
+
+function buildItem(o, ctx) {
+  const group = new THREE.Group();
+  const body = buildItemBody(o);
+  body.position.y = Math.max(0.2, o.y ?? 0.6);
+  body.userData.itemBody = true;
+  group.add(body);
+  // marcador do editor: anel no chão
+  const ring = makeMesh(sharedGeometry('item-ring', () => new THREE.RingGeometry(0.42, 0.5, 28).rotateX(-Math.PI / 2)), o.color, { edges: false, collider: false, shadow: false });
+  ring.position.y = 0.03;
+  ring.userData.editorOnly = true;
+  group.add(ring);
+  if (o.hidden) group.userData.startsHidden = true;
+  group.position.set(o.x, ctx.levelY(o.levelId), o.z);
+  group.rotation.y = o.rotY || 0;
+  group.traverse((m) => { m.userData.collider = false; });
+  return group;
+}
+
+/** Zona de gatilho: caixa translúcida com contorno tracejado (só no editor). */
+function buildZone(o, ctx) {
+  const group = new THREE.Group();
+  const w = Math.max(0.2, o.w), d = Math.max(0.2, o.d), h = Math.max(0.2, o.h);
+  const geo = new THREE.BoxGeometry(w, h, d);
+  geo.translate(0, h / 2, 0);
+  const fill = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: o.color, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+  fill.renderOrder = 5;
+  fill.userData.editorOnly = true;
+  fill.userData.zoneFill = true;
+  group.add(fill);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineDashedMaterial({ color: o.color, dashSize: 0.3, gapSize: 0.18 }));
+  edges.computeLineDistances();
+  edges.userData.editorOnly = true;
+  edges.raycast = () => {};
+  group.add(edges);
+  // chão da zona um pouco mais forte para ler na planta
+  const floor = new THREE.Mesh(sharedGeometry(`zone-floor`, () => new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)),
+    new THREE.MeshBasicMaterial({ color: o.color, transparent: true, opacity: 0.22, depthWrite: false }));
+  floor.scale.set(w, 1, d);
+  floor.position.y = 0.04;
+  floor.userData.editorOnly = true;
+  floor.raycast = () => {};
+  group.add(floor);
+  for (const m of [fill, edges, floor]) m.userData.ownMaterial = true;
+  group.position.set(o.x, ctx.levelY(o.levelId), o.z);
+  group.rotation.y = o.rotY || 0;
   group.traverse((m) => { m.userData.collider = false; });
   return group;
 }
