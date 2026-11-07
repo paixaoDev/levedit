@@ -695,6 +695,12 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
 .logic-sec-head .chip-ico { color: var(--select); display: grid; }
 .logic-goal { background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px 12px 10px; }
 .logic-goal .logic-sec-head { margin-top: 8px; }
+.logic-groups { margin-top: 12px; }
+.group-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.group-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--paper); border: 1px solid var(--line-soft); border-left: 4px solid var(--c, var(--line)); border-radius: 8px; padding: 3px 8px; font-size: 12px; }
+.group-chip.custom { padding: 2px 4px 2px 6px; }
+.group-chip.custom input[type=color] { width: 18px; height: 18px; padding: 0; border: 0; background: none; }
+.group-chip .group-name { width: 96px; border: 0; background: transparent; font: inherit; padding: 2px; }
 .logic-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
 .logic-row > label:first-child { width: 96px; color: var(--ink-2); font-size: 12px; }
 .logic-row .muted { font-size: 11.5px; }

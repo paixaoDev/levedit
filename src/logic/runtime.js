@@ -6,13 +6,14 @@
 //   act(action)            executa uma ação de cena (open, hide, spawn, message, win...)
 //   isEnemyDead(id)        true se o inimigo já foi derrotado
 //   enemiesLeft(dormant)   inimigos vivos e acordados (dormant=true conta os dormindo)
-//   totalItems()           itens que existem no level
+//   itemKind(id)           grupo (tipo) de um item do level, inclusive os que caem de caixas
+//   itemsLeft()            itens coletáveis do level que ainda não foram pegos
 //   playerHealth()         vida atual do player
 //   onState?()             inventário ou contadores mudaram (atualiza o HUD)
 //   onEvent?(type, target) todo evento disparado (o script também recebe)
-import { EVENTS, CONDITIONS } from './schema.js';
+import { EVENTS, CONDITIONS, GROUP, isGroupRef } from './schema.js';
 
-const SCENE_ACTIONS = new Set(['open', 'close', 'toggle', 'show', 'hide', 'spawn', 'kill', 'behavior', 'message', 'teleport', 'heal', 'damage', 'goTo', 'moveTo', 'rotate', 'color', 'param', 'push']);
+const SCENE_ACTIONS = new Set(['open', 'close', 'toggle', 'show', 'hide', 'spawn', 'kill', 'behavior', 'message', 'teleport', 'heal', 'damage', 'goTo', 'moveTo', 'rotate', 'color', 'param', 'push', 'hit']);
 
 export class LogicRuntime {
   constructor(logic, host, { maxDepth = 16 } = {}) {
@@ -22,6 +23,7 @@ export class LogicRuntime {
     this.rules = (this.logic.rules || []).filter((r) => r && r.when && EVENTS[r.when.type]);
     this.vars = new Map();
     this.items = new Map(); // id do item -> quantidade
+    this.groups = new Map(); // grupo (tipo) -> quantidade que o player tem
     this.collected = 0;
     this.fired = new Set(); // regras "só uma vez" que já rodaram
     this.disabled = new Set(this.rules.filter((r) => r.enabled === false).map((r) => r.id));
@@ -73,7 +75,7 @@ export class LogicRuntime {
       this.host.onEvent?.(type, target);
       for (const r of this.rules) {
         if (r.when.type !== type) continue;
-        if (r.when.target && r.when.target !== target) continue;
+        if (r.when.target && !this.matches(r.when.target, target)) continue;
         this.fire(r);
         if (this.ended) break;
       }
@@ -81,6 +83,18 @@ export class LogicRuntime {
     } finally {
       this.depth--;
     }
+  }
+
+  /** O alvo da regra (um id ou um grupo 'g:coin') casa com o objeto do evento? */
+  matches(ref, id) {
+    if (ref === id) return true;
+    return isGroupRef(ref) && id != null && this.host.itemKind?.(id) === ref.slice(GROUP.length);
+  }
+
+  /** Quanto o player tem de um item ou de um grupo. */
+  count(ref) {
+    if (isGroupRef(ref)) return this.groups.get(ref.slice(GROUP.length)) || 0;
+    return this.items.get(ref) || 0;
   }
 
   /** Roda uma regra se ela estiver ligada, ainda puder rodar e as condições passarem. */
@@ -98,8 +112,9 @@ export class LogicRuntime {
   test(c) {
     if (!CONDITIONS[c.type]) return true;
     switch (c.type) {
-      case 'hasItem': return (this.items.get(c.target) || 0) > 0;
-      case 'noItem': return !((this.items.get(c.target) || 0) > 0);
+      case 'hasItem': return this.count(c.target) > 0;
+      case 'noItem': return !(this.count(c.target) > 0);
+      case 'count': return compare(this.count(c.target), c.op, c.value);
       case 'itemCount': return compare(this.collected, c.op, c.value);
       case 'enemyDead': return !!this.host.isEnemyDead?.(c.target);
       case 'enemyAlive': return !this.host.isEnemyDead?.(c.target);
@@ -131,6 +146,7 @@ export class LogicRuntime {
       case 'addVar': this.setVar(a.target, this.getVar(a.target) + (+a.value || 0)); break;
       case 'setVar': this.setVar(a.target, +a.value || 0); break;
       case 'give': this.addItem(a.target, Math.max(1, +a.value || 1), false); break;
+      case 'take': this.takeItem(a.target, Math.max(1, +a.value || 1)); break;
       case 'enableRule': this.ruleOn(a.target, true); break;
       case 'disableRule': this.ruleOn(a.target, false); break;
       case 'win': this.end(true, a.text); break;
@@ -155,10 +171,40 @@ export class LogicRuntime {
   /** Player pegou (ou ganhou) um item. pickup=true dispara o evento "Pegar um item". */
   addItem(id, n = 1, pickup = true) {
     if (!id) return;
-    this.items.set(id, (this.items.get(id) || 0) + n);
+    if (isGroupRef(id)) {
+      // "dar 3 moedas": soma no grupo sem precisar de um item específico
+      const k = id.slice(GROUP.length);
+      this.groups.set(k, (this.groups.get(k) || 0) + n);
+    } else {
+      this.items.set(id, (this.items.get(id) || 0) + n);
+      const k = this.host.itemKind?.(id);
+      if (k) this.groups.set(k, (this.groups.get(k) || 0) + n);
+    }
     this.collected += n;
     this.host.onState?.();
     if (pickup) this.emit('pickup', id);
+  }
+
+  /** Gasta itens: de um grupo (qualquer item dele) ou de um item específico. */
+  takeItem(ref, n = 1) {
+    if (!ref) return;
+    const dec = (map, k, m) => { const left = Math.max(0, (map.get(k) || 0) - m); map.set(k, left); };
+    if (isGroupRef(ref)) {
+      const k = ref.slice(GROUP.length);
+      let m = Math.min(n, this.groups.get(k) || 0);
+      dec(this.groups, k, m);
+      // tira dos itens desse grupo também, para "tem o item" continuar certo
+      for (const [id, v] of this.items) {
+        if (m <= 0) break;
+        if (v > 0 && this.host.itemKind?.(id) === k) { const d = Math.min(v, m); dec(this.items, id, d); m -= d; }
+      }
+    } else {
+      const m = Math.min(n, this.items.get(ref) || 0);
+      dec(this.items, ref, m);
+      const k = this.host.itemKind?.(ref);
+      if (k) dec(this.groups, k, m);
+    }
+    this.host.onState?.();
   }
 
   ruleOn(ref, on) {
@@ -194,9 +240,12 @@ export class LogicRuntime {
       case 'reachZone':
         if (type === 'enter' && g.zoneId && target === g.zoneId) this.end(true, 'Você chegou ao destino!');
         break;
-      case 'collectAll': {
-        const total = this.host.totalItems?.() ?? 0;
-        if (type === 'pickup' && total > 0 && this.pickedDistinct() >= total) this.end(true, 'Você coletou tudo!');
+      case 'collectAll':
+        if (type === 'pickup' && (this.host.itemsLeft?.() ?? 1) === 0) this.end(true, 'Você coletou tudo!');
+        break;
+      case 'collectGroup': {
+        const need = Math.max(1, +g.count || 1);
+        if ((type === 'pickup' || type === 'varChange' || type === 'tick') && g.group && (this.groups.get(g.group) || 0) >= need) this.end(true, 'Você juntou tudo o que precisava!');
         break;
       }
       case 'survive':
@@ -206,18 +255,13 @@ export class LogicRuntime {
     }
   }
 
-  pickedDistinct() {
-    let n = 0;
-    for (const v of this.items.values()) if (v > 0) n++;
-    return n;
-  }
-
   /** Resumo serializável para o script e o HUD. */
   snapshot() {
     return {
       time: this.elapsed,
       vars: Object.fromEntries(this.vars),
       items: Object.fromEntries(this.items),
+      groups: Object.fromEntries(this.groups),
       collected: this.collected,
     };
   }

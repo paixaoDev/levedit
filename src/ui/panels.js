@@ -1,7 +1,7 @@
 // Painéis: níveis, lista de objetos, opções da ferramenta e propriedades.
 import { el, field, group } from './fields.js';
-import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, ITEM_KINDS, makeLevel, normalizeObject, makeObject } from '../model.js';
-import { GOALS, rulesUsing, describeRule } from '../logic/schema.js';
+import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, BREAKABLE_KINDS, itemGroups, makeLevel, normalizeObject, makeObject } from '../model.js';
+import { GOALS, GROUP, rulesUsing, describeRule, targetName } from '../logic/schema.js';
 import { OBJECT_SCRIPT_EXAMPLES } from '../logic/script.js';
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
@@ -238,17 +238,22 @@ export class Panels {
       box.append(...lightFields((f) => field(opt, f, onF), { placing: true }));
     } else if (t === 'item') {
       const pal = el('div', { class: 'palette' });
-      const ICON = { key: TOOL_ICONS.item, coin: 'M12 4a8 8 0 1 0 .01 0z M12 8v8', gem: 'M6 9l6-6 6 6-6 12z M6 9h12', health: 'M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z', orb: 'M12 5a7 7 0 1 0 .01 0z' };
-      const COLOR = { key: '#d9a441', coin: '#d9a441', gem: '#6d9bb8', health: '#b56b7a', orb: '#9bb57a' };
-      for (const [k, label] of Object.entries(ITEM_KINDS)) {
+      const ICON = {
+        key: TOOL_ICONS.item, coin: 'M12 4a8 8 0 1 0 .01 0z M12 8v8', gem: 'M6 9l6-6 6 6-6 12z M6 9h12', star: 'M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z',
+        health: 'M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z', orb: 'M12 5a7 7 0 1 0 .01 0z', crate: 'M4 5h16v14H4z M4 12h16 M9 5v14 M15 5v14', vase: 'M9 3h6 M10 3v3c-4 2-5 6-3 11 1 2 9 2 10 0 2-5 1-9-3-11V3',
+      };
+      for (const g of itemGroups(this.store.doc)) {
         pal.append(el('button', {
-          type: 'button', class: opt.kind === k ? 'active' : '', title: label,
-          onclick: () => { tools.options.item.color = COLOR[k]; set('kind', k); },
-          html: `<svg viewBox="0 0 24 24"><path d="${ICON[k]}"/></svg><span>${label}</span>`,
+          type: 'button', class: opt.kind === g.id ? 'active' : '', title: g.name,
+          onclick: () => {
+            Object.assign(tools.options.item, { color: g.color, hp: 0, dropKind: 'coin', dropCount: 0 }, BREAKABLE_KINDS[g.id] || {});
+            set('kind', g.id);
+          },
+          html: `<svg viewBox="0 0 24 24"><path d="${ICON[g.id] || ICON.orb}"/></svg><span>${g.name}</span>`,
         }));
       }
       box.append(pal, field(opt, { key: 'color', label: 'Cor', type: 'color' }, onF),
-        el('p', { class: 'info' }, 'O player pega o item ao encostar. Use regras para decidir o que ele faz (abrir porta, acordar inimigo...).'));
+        el('p', { class: 'info' }, 'O player pega o item ao encostar. Caixa e Vaso são quebráveis: soltam outros itens quando o player bate. Nas regras, cada tipo é um grupo ("pegar qualquer Moeda").'));
     } else if (t === 'zone') {
       box.append(
         field(opt, { key: 'w', label: 'Largura', type: 'range', min: 0.5, max: 30, step: 0.5 }, onF),
@@ -269,15 +274,19 @@ export class Panels {
   /** Regras que usam o objeto + atalho para criar uma nova a partir dele. */
   logicFields(o) {
     const doc = this.store.doc;
-    const nameOf = (id) => this.store.get(id)?.name || doc.logic.rules.find((r) => r.id === id)?.name || '?';
-    const used = rulesUsing(doc.logic, o.id);
+    const nameOf = (id) => targetName(doc, id);
+    const gref = o.type === 'item' ? `${GROUP}${o.kind}` : null;
+    const used = [...new Set([...rulesUsing(doc.logic, o.id), ...(gref ? rulesUsing(doc.logic, gref) : [])])];
     const isEnemy = o.type === 'agent' && o.role === 'enemy';
-    const preset = o.type === 'item' ? { when: { type: 'pickup', target: o.id }, do: [] }
+    const gname = gref ? targetName(doc, gref) : '';
+    // chave e caixa: regra deste item; moeda, gema, estrela...: regra do grupo inteiro
+    const own = o.type === 'item' && (o.kind === 'key' || +o.hp > 0);
+    const preset = o.type === 'item' ? { when: { type: +o.hp > 0 ? 'break' : 'pickup', target: own ? o.id : gref }, once: own, do: [] }
       : o.type === 'zone' ? { when: { type: o.usable ? 'use' : 'enter', target: o.id }, once: !o.usable, do: [] }
       : isEnemy ? { when: { type: 'kill', target: o.id }, do: [] }
       : o.type === 'asset' ? { when: { type: 'start', target: null }, do: [{ type: 'open', target: o.id }] }
       : { do: [] };
-    const label = o.type === 'item' ? 'Quando pegar este item…' : o.type === 'zone' ? (o.usable ? 'Quando usar esta zona…' : 'Quando entrar nesta zona…') : isEnemy ? 'Quando derrotar este inimigo…' : 'Regra que mexe neste objeto…';
+    const label = o.type === 'item' ? (+o.hp > 0 ? 'Quando quebrar este item…' : own ? 'Quando pegar este item…' : `Quando pegar ${gname}…`) : o.type === 'zone' ? (o.usable ? 'Quando usar esta zona…' : 'Quando entrar nesta zona…') : isEnemy ? 'Quando derrotar este inimigo…' : 'Regra que mexe neste objeto…';
     return [
       used.length ? el('ul', { class: 'rule-list' }, ...used.map((r) => el('li', {}, el('button', {
         class: 'btn ghost small', type: 'button', onclick: () => this.app.logic.open({ tab: 'simple', ruleId: r.id }),
@@ -529,13 +538,25 @@ export class Panels {
       box.append(G('Transformação', this.transformFields(o, F)));
     } else if (o.type === 'item') {
       box.append(meta());
+      const groups = Object.fromEntries(itemGroups(doc).map((g) => [g.id, g.name]));
+      if (!groups[o.kind]) groups[o.kind] = `${o.kind} (removido)`;
+      const breakable = +o.hp > 0;
       box.append(el('div', { class: 'quick' },
-        F({ key: 'kind', label: 'Tipo', type: 'select', options: ITEM_KINDS }),
-        F({ key: 'amount', label: o.kind === 'health' ? 'Vida recuperada' : 'Valor', type: 'number', step: 1, min: 0, show: (x) => x.kind === 'health' || x.kind === 'coin' || x.kind === 'gem' }),
+        F({ key: 'kind', label: 'Grupo', type: 'select', options: groups }),
+        F({ key: 'amount', label: 'Vida recuperada', type: 'number', step: 1, min: 0, show: (x) => x.kind === 'health' && !(+x.hp > 0) }),
         F({ key: 'color', label: 'Cor', type: 'color' }),
-        F({ key: 'y', label: 'Altura', type: 'range', min: 0.2, max: 4, step: 0.05 }),
+        F({ key: 'y', label: 'Altura', type: 'range', min: 0.2, max: 4, step: 0.05, show: (x) => !(+x.hp > 0) }),
         F({ key: 'hidden', label: 'Escondido', type: 'bool', text: 'aparece só quando uma regra mostrar' }),
+        el('p', { class: 'info' }, breakable
+          ? 'Quebrável: o player não pega, ele bate (tiro, pulo em cima ou batida de carro). Regras podem usar "Quebrar um item".'
+          : `As regras podem valer para o grupo inteiro: "Pegar qualquer ${groups[o.kind] || 'item'}", "ter 5 de ${groups[o.kind] || 'um grupo'}".`),
       ));
+      box.append(G('Quebrável', [
+        F({ key: 'hp', label: 'Resistência (HP)', type: 'number', step: 5, min: 0 }),
+        el('p', { class: 'info' }, '0 = item normal, que o player pega. Acima de 0, cada ataque tira HP e no zero ele quebra.'),
+        F({ key: 'dropKind', label: 'Solta itens do grupo', type: 'select', options: groups, show: (x) => +x.hp > 0 }),
+        F({ key: 'dropCount', label: 'Quantos', type: 'number', step: 1, min: 0, show: (x) => +x.hp > 0 }),
+      ], breakable));
       box.append(G('Lógica', this.logicFields(o)));
       box.append(G('Script (avançado)', this.scriptFields(o)));
       box.append(G('Transformação', this.transformFields(o, F)));
@@ -774,7 +795,7 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'usable', 'startState', 'hidden', 'active', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'usable', 'startState', 'hidden', 'active', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId', 'hp'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {
@@ -784,6 +805,13 @@ export class Panels {
         if (t.points && /^(width|smooth|walls\.)/.test(key)) markEdited(d, t);
         if (key === 'mode' && t.type === 'agent') { t.params = {}; normalizeObject(t); }
         if (key === 'topLevelId' && !value) t.topOffset = 0;
+        if (key === 'kind' && t.type === 'item') {
+          // trocar o grupo pinta o item com a cor do grupo; caixa e vaso já vêm quebráveis
+          const gr = itemGroups(d).find((x) => x.id === value);
+          if (gr) t.color = gr.color;
+          if (BREAKABLE_KINDS[value] && !(+t.hp > 0)) Object.assign(t, BREAKABLE_KINDS[value]);
+          else if (!BREAKABLE_KINDS[value] && BREAKABLE_KINDS[o.kind]) t.hp = 0;
+        }
         if (key === 'kind' && t.type === 'asset' && value === 'custom' && !t.customId) t.customId = Object.keys(d.customAssets || {})[0] || null;
       }
     }, { ids: targets, record, structure: (structural || key === 'groupId' || key.startsWith('joins')) && final });

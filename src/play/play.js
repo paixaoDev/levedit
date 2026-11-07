@@ -2,9 +2,9 @@
 // inimigos (atirador, arcade, carro) com comportamentos parado/vagar/patrulhar/perseguir.
 import * as THREE from 'three';
 import { World, CharacterBody, CarBody } from './physics.js';
-import { buildAgentBody, corridorSamples, makeContext } from '../builders/index.js';
+import { buildAgentBody, buildObject, corridorSamples, makeContext, isBreakable } from '../builders/index.js';
 import { samplePath } from '../math/curve.js';
-import { normalizeObject, makeObject } from '../model.js';
+import { normalizeObject, makeObject, itemGroups } from '../model.js';
 import { applyVisualState } from '../render/materials.js';
 import { TouchControls, prefersTouch } from './touchControls.js';
 import { LogicRuntime } from '../logic/runtime.js';
@@ -88,7 +88,8 @@ export class PlayMode {
     for (const e of this.enemies) if (e.o.active === false) { e.dormant = true; e.mesh.visible = false; }
     this.items = doc.objects.filter((o) => o.type === 'item').map((o) => {
       const g = this.vp.objects.get(o.id);
-      return { o, g, body: g?.children.find((c) => c.userData.itemBody), taken: false, hidden: !!o.hidden, phase: Math.random() * 6 };
+      const breakable = isBreakable(o);
+      return { o, g, body: g?.children.find((c) => c.userData.itemBody), taken: false, hidden: !!o.hidden, phase: Math.random() * 6, breakable, hp: breakable ? +o.hp : 0 };
     }).filter((it) => it.g);
     this.zones = doc.objects.filter((o) => o.type === 'zone').map((o) => ({ o, inside: false, off: false }));
     const useRules = new Set((doc.logic?.rules || []).filter((r) => r.when?.type === 'use').map((r) => r.when.target));
@@ -131,7 +132,8 @@ export class PlayMode {
       act: (a) => this.act(a),
       isEnemyDead: (id) => { const e = this.enemyById(id); return e ? !e.alive : false; },
       enemiesLeft: (withDormant) => this.enemies.filter((e) => e.alive && (withDormant || !e.dormant)).length,
-      totalItems: () => this.items.length,
+      itemKind: (id) => this.items.find((it) => it.o.id === id)?.o.kind || null,
+      itemsLeft: () => this.items.filter((it) => !it.breakable && !it.dropped && !it.taken).length,
       playerHealth: () => this.player.health,
       onState: () => this.renderInventory(),
       onEvent: (type, target) => this.script?.send(type, target, this.scriptState()),
@@ -148,7 +150,9 @@ export class PlayMode {
         (msg) => { this.toast(`Erro no script: ${msg}`, 5); console.warn('[levedit script]', msg); });
     }
     const g = logic.goal || { type: 'killAll' };
+    const grp = itemGroups(doc).find((x) => x.id === g.group);
     this.objectiveText = g.type === 'reachZone' ? `Objetivo: chegar em ${this.store.get(g.zoneId)?.name || 'zona'}`
+      : g.type === 'collectGroup' ? `Objetivo: juntar ${Math.max(1, +g.count || 1)} × ${grp?.name || 'item'}`
       : g.type === 'survive' ? `Objetivo: sobreviver ${g.seconds || 60}s`
       : g.type === 'rules' ? '' : `Objetivo: ${GOALS[g.type]?.label.toLowerCase() || ''}`;
     if (this.hudGoal) this.hudGoal.textContent = this.objectiveText;
@@ -176,10 +180,18 @@ export class PlayMode {
     const pl = this.player;
     const names = {};
     for (const o of this.store.doc.objects) names[o.name] = o.id;
+    const kinds = {};
+    for (const it of this.items) kinds[it.o.id] = it.o.kind;
+    const groupNames = {};
+    for (const gr of itemGroups(this.store.doc)) { groupNames[gr.id.toLowerCase()] = gr.id; groupNames[gr.name.toLowerCase()] = gr.id; }
     const snap = this.logic.snapshot();
     return {
       ...snap,
       names,
+      kinds,
+      groupNames,
+      items: { ...snap.items },
+      itemsInLevel: this.items.map((it) => ({ id: it.o.id, name: it.o.name, kind: it.o.kind, x: it.g.position.x, y: it.g.position.y, z: it.g.position.z, taken: it.taken, broken: !!it.broken, hp: it.hp })),
       player: { id: pl.o.id, name: pl.o.name, x: pl.body.pos.x, y: pl.body.pos.y, z: pl.body.pos.z, health: pl.health, maxHealth: pl.p.health, dead: pl.dead > 0, mode: pl.mode, params: { ...pl.p } },
       enemies: this.enemies.map((e) => ({ id: e.o.id, name: e.o.name, x: e.body.pos.x, y: e.body.pos.y, z: e.body.pos.z, alive: e.alive, awake: !e.dormant, health: e.health, behavior: e.o.behavior })),
       objects: [...this.assetState].map(([id, st]) => ({ id, name: this.store.get(id)?.name, x: st.g.position.x, y: st.g.position.y, z: st.g.position.z, open: st.open, hidden: st.hidden })),
@@ -191,7 +203,8 @@ export class PlayMode {
     if (t == null || t === '') return null;
     if (t === 'player') return this.player.o;
     const doc = this.store.doc;
-    return doc.objects.find((o) => o.id === t) || doc.objects.find((o) => o.name === t) || null;
+    return doc.objects.find((o) => o.id === t) || doc.objects.find((o) => o.name === t)
+      || this.items?.find((it) => it.o.id === t)?.o || null; // itens que caíram de caixas
   }
 
   enemyById(id) { return this.enemies.find((e) => e.o.id === id) || null; }
@@ -231,7 +244,12 @@ export class PlayMode {
           break;
         }
         const it = this.items.find((x) => x.o.id === id);
-        if (it) { it.hidden = !show; it.g.visible = show && !it.taken; break; }
+        if (it) {
+          it.hidden = !show;
+          it.g.visible = show && !it.taken && !it.broken;
+          if (it.breakable && !it.broken) this.world.setEnabled(it.g, show);
+          break;
+        }
         const z = this.zones.find((x) => x.o.id === id);
         if (z) { z.off = !show; break; }
         const e = this.enemyById(id);
@@ -289,6 +307,13 @@ export class PlayMode {
         if (pl.body.vel) pl.body.vel.set(0, 0, 0);
         if (pl.mode === 'car') pl.body.speed = 0;
         this.burst(p.clone().add(V().set(0, 1, 0)), 0x6d9bb8, 12);
+        break;
+      }
+      case 'hit': {
+        const it = this.items.find((x) => x.o.id === id);
+        if (it) { this.hitItem(it, +a.value || 10); break; }
+        const e = this.enemyById(id);
+        if (e?.alive && !e.dormant) this.damageEnemy(e, +a.value || 10);
         break;
       }
       case 'heal': pl.health = Math.min(pl.p.health, pl.health + (+a.value || 0)); break;
@@ -349,7 +374,8 @@ export class PlayMode {
     const pp = pl.body.pos;
     const r = pl.mode === 'car' ? 2.2 : 1.2;
     for (const it of this.items) {
-      if (it.taken || it.hidden) continue;
+      if (it.taken || it.hidden || it.broken) continue;
+      if (it.breakable) { it.flash = Math.max(0, (it.flash || 0) - dt); if (it.body) it.body.scale.setScalar(1 + it.flash * 0.6); continue; }
       it.phase += dt;
       if (it.body) {
         it.body.rotation.y += dt * 2;
@@ -396,10 +422,16 @@ export class PlayMode {
     if (!this.hudInv || !this.logic) return;
     const doc = this.store.doc;
     const chips = [];
+    // chaves (e itens de grupos próprios) aparecem pelo nome; o resto, somado por grupo
     for (const [id, n] of this.logic.items) {
       const o = doc.objects.find((x) => x.id === id);
-      if (!o || n <= 0 || o.kind === 'health') continue;
+      if (!o || n <= 0 || o.kind !== 'key') continue;
       chips.push(`<span class="inv-chip" style="--c:${o.color}">${escapeHtml(o.name)}${n > 1 ? ` ×${n}` : ''}</span>`);
+    }
+    for (const gr of itemGroups(doc)) {
+      const n = this.logic.groups.get(gr.id) || 0;
+      if (n <= 0 || gr.id === 'key' || gr.id === 'health') continue;
+      chips.push(`<span class="inv-chip" style="--c:${gr.color}">${escapeHtml(gr.name)} ×${n}</span>`);
     }
     for (const [k, v] of this.logic.vars) chips.push(`<span class="inv-chip var">${escapeHtml(k)}: ${+v.toFixed?.(2) || v}</span>`);
     this.hudInv.innerHTML = chips.join('');
@@ -659,10 +691,19 @@ export class PlayMode {
       const h = rc.intersectObject(e.mesh, true)[0];
       if (h && h.distance < maxD) { maxD = h.distance; target = e; }
     }
+    // caixas e vasos: o raio do mundo para neles, então vale empate com a parede
+    let crate = null;
+    rc.far = maxD + 0.05;
+    for (const it of this.items) {
+      if (!it.breakable || it.broken || it.hidden) continue;
+      const h = rc.intersectObject(it.g, true)[0];
+      if (h && h.distance <= maxD + 0.05) { maxD = h.distance; crate = it; target = null; }
+    }
     const end = origin.clone().addScaledVector(dir, maxD);
     const gun = origin.clone().add(V().set(0.25, -0.2, 0).applyQuaternion(this.camera.quaternion));
     this.tracer(gun, end, 0xc0632f);
     if (target) this.damageEnemy(target, pl.p.damage);
+    else if (crate) this.hitItem(crate, pl.p.damage);
   }
 
   updatePlatform(pl, dt) {
@@ -706,6 +747,20 @@ export class PlayMode {
         }
       }
     }
+    // pular em cima de caixa/vaso quebra (ou tira hp)
+    if (b.vel.y < -1 || (b.onGround && pl.lastVy < -4)) {
+      for (const it of this.items) {
+        if (!it.breakable || it.broken || it.hidden) continue;
+        const gp = it.g.position;
+        const top = gp.y + (it.o.kind === 'vase' ? 0.84 : 0.9);
+        if (Math.hypot(gp.x - b.pos.x, gp.z - b.pos.z) < 0.75 && b.pos.y > top - 0.35 && b.pos.y < top + 0.4) {
+          this.hitItem(it, p.stompDamage);
+          b.vel.y = p.jump * 0.75;
+          b.jumps = 1;
+        }
+      }
+    }
+    pl.lastVy = b.vel.y;
     // câmera em terceira pessoa
     const d = p.cameraDistance;
     const desired = V().set(Math.sin(a) * d, d * 0.55 + 1.5, Math.cos(a) * d).add(b.pos);
@@ -737,6 +792,14 @@ export class PlayMode {
         const push = e.body.pos.clone().sub(b.pos).setY(0).normalize().multiplyScalar(8);
         if (e.body.vel) { e.body.vel.x += push.x; e.body.vel.z += push.z; e.body.vel.y = 4; }
         b.speed *= 0.8;
+      }
+    }
+    for (const it of this.items) {
+      if (!it.breakable || it.broken || it.hidden) continue;
+      it.ramCd = (it.ramCd || 0) - dt;
+      if (it.g.position.distanceTo(b.pos) < 2.1 && Math.abs(b.speed) > 4 && it.ramCd <= 0) {
+        it.ramCd = 0.6;
+        this.hitItem(it, p.ramDamage * Math.min(1.5, Math.abs(b.speed) / (p.maxSpeed * 0.6)));
       }
     }
     const f = b.forward();
@@ -868,6 +931,44 @@ export class PlayMode {
       e.wanderT = 3 + Math.random() * 3;
     }
     return e.wander;
+  }
+
+  /** Ataque num item quebrável: tira hp e, no zero, quebra e solta os itens. */
+  hitItem(it, dmg) {
+    if (!it.breakable || it.broken || it.hidden) return;
+    it.hp -= Math.max(0, +dmg || 0);
+    it.flash = 0.15;
+    const gp = it.g.position;
+    this.burst(gp.clone().add(V().set(0, 0.6, 0)), new THREE.Color(it.o.color).getHex(), 4);
+    if (it.hp > 0) return;
+    it.broken = true;
+    it.g.visible = false;
+    this.world.setEnabled(it.g, false);
+    this.burst(gp.clone().add(V().set(0, 0.5, 0)), new THREE.Color(it.o.color).getHex(), 16);
+    this.dropItems(it);
+    this.logic?.emit('break', it.o.id);
+  }
+
+  /** Itens que saem de uma caixa quebrada: dropCount do grupo dropKind, em volta dela. */
+  dropItems(it) {
+    const n = Math.min(30, Math.max(0, Math.round(+it.o.dropCount || 0)));
+    const gr = itemGroups(this.store.doc).find((x) => x.id === it.o.dropKind);
+    if (!n || !gr) return;
+    const gp = it.g.position;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+      const r = n === 1 ? 0 : 0.7 + Math.random() * 0.3;
+      const o = normalizeObject(makeObject('item', {
+        name: gr.name, kind: gr.id, color: gr.color, levelId: it.o.levelId,
+        x: gp.x + Math.cos(a) * r, z: gp.z + Math.sin(a) * r, y: 0.6, amount: gr.id === 'health' ? 25 : 1,
+      }));
+      o.id = `${it.o.id}~${i + 1}`;
+      const g = buildObject(o, this.ctx);
+      g.position.y = gp.y;
+      g.traverse((m) => { if (m.userData.editorOnly) m.visible = false; });
+      this.runtime.add(g);
+      this.items.push({ o, g, body: g.children.find((c) => c.userData.itemBody), taken: false, hidden: false, phase: Math.random() * 6, breakable: false, hp: 0, dropped: true });
+    }
   }
 
   damageEnemy(e, dmg) {

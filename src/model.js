@@ -107,6 +107,11 @@ export const TYPE_DEFAULTS = {
     color: '#d9a441',
     amount: 1, // vida recuperada (kind 'health') ou valor (moedas/gemas)
     hidden: false, // começa escondido (uma regra mostra)
+    // quebrável: com hp > 0 o item não é pego; qualquer ataque tira hp e, ao quebrar,
+    // ele solta dropCount itens do grupo dropKind
+    hp: 0,
+    dropKind: 'coin',
+    dropCount: 0,
   },
   zone: {
     name: 'Zona',
@@ -140,13 +145,30 @@ export const TYPE_DEFAULTS = {
   },
 };
 
+// Grupos de item já prontos: o tipo do item é o grupo dele, e as regras podem valer
+// para o grupo inteiro ("pegar qualquer Moeda", "ter 5 Estrelas").
 export const ITEM_KINDS = {
   key: 'Chave',
   coin: 'Moeda',
   gem: 'Gema',
+  star: 'Estrela',
   health: 'Vida',
   orb: 'Orbe',
+  crate: 'Caixa',
+  vase: 'Vaso',
 };
+
+export const ITEM_COLORS = { key: '#d9a441', coin: '#d9a441', gem: '#6d9bb8', star: '#e3c25a', health: '#b56b7a', orb: '#9bb57a', crate: '#a07a52', vase: '#b9825e' };
+
+/** Tipos que já nascem quebráveis (caixa e vaso). */
+export const BREAKABLE_KINDS = { crate: { hp: 30, dropKind: 'coin', dropCount: 3 }, vase: { hp: 10, dropKind: 'gem', dropCount: 1 } };
+
+/** Todos os grupos de item do level: os prontos e os criados pelo autor (doc.logic.groups). */
+export function itemGroups(doc) {
+  const out = Object.entries(ITEM_KINDS).map(([id, name]) => ({ id, name, color: ITEM_COLORS[id], preset: true }));
+  for (const g of doc?.logic?.groups || []) if (g?.id && !ITEM_KINDS[g.id]) out.push({ id: g.id, name: g.name || g.id, color: g.color || '#9bb57a', preset: false });
+  return out;
+}
 
 export const ASSET_KINDS = {
   cube: 'Cubo',
@@ -195,9 +217,10 @@ export const BEHAVIORS = {
 
 // Lógica do jogo (modo de jogo + regras quando/se/então + script opcional).
 export const LOGIC_DEFAULTS = {
-  goal: { type: 'killAll', zoneId: null, seconds: 60 },
+  goal: { type: 'killAll', zoneId: null, seconds: 60, group: 'coin', count: 5 },
   timeLimit: 0,
   rules: [],
+  groups: [], // grupos de item criados pelo autor: { id, name, color }
   script: '',
   scriptEnabled: false,
 };
@@ -249,5 +272,6 @@ export function normalizeDoc(doc) {
   d.objects = d.objects.filter((o) => TYPE_DEFAULTS[o.type]).map(normalizeObject);
   withDefaults(d.logic, LOGIC_DEFAULTS);
   if (!Array.isArray(d.logic.rules)) d.logic.rules = [];
+  if (!Array.isArray(d.logic.groups)) d.logic.groups = [];
   return d;
 }

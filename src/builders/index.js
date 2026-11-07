@@ -531,16 +531,41 @@ export function buildItemBody(o) {
       add(sharedGeometry('item-hp-a', () => new THREE.BoxGeometry(0.5, 0.17, 0.17)), c);
       add(sharedGeometry('item-hp-b', () => new THREE.BoxGeometry(0.17, 0.5, 0.17)), c);
       break;
+    case 'star':
+      add(sharedGeometry('item-star', () => starGeometry(0.36, 0.16, 0.12)), c);
+      break;
+    // quebráveis: ficam apoiados no chão (base em y = 0)
+    case 'crate':
+      add(sharedGeometry('item-crate', () => new THREE.BoxGeometry(0.9, 0.9, 0.9)), c, 0, 0.45, 0);
+      add(sharedGeometry('item-crate-band', () => new THREE.BoxGeometry(0.94, 0.12, 0.94)), shade(c, -0.25), 0, 0.45, 0);
+      break;
+    case 'vase':
+      add(sharedGeometry('item-vase', () => new THREE.LatheGeometry([[0.001, 0], [0.24, 0.02], [0.34, 0.25], [0.3, 0.55], [0.16, 0.72], [0.2, 0.84], [0.001, 0.84]].map(([x, y]) => new THREE.Vector2(x, y)), 14)), c);
+      break;
     default:
       add(sharedGeometry('item-orb', () => new THREE.IcosahedronGeometry(0.3, 1)), c);
   }
   return g;
 }
 
+/** Estrela de 5 pontas com espessura (item "Estrela"). */
+function starGeometry(R, r, depth) {
+  const s = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const a = Math.PI / 2 + (i * Math.PI) / 5, k = i % 2 ? r : R;
+    i ? s.lineTo(Math.cos(a) * k, Math.sin(a) * k) : s.moveTo(Math.cos(a) * k, Math.sin(a) * k);
+  }
+  return new THREE.ExtrudeGeometry(s, { depth, bevelEnabled: false }).translate(0, 0, -depth / 2);
+}
+
+/** Item quebrável (hp > 0): fica no chão, é sólido e não é pego ao encostar. */
+export const isBreakable = (o) => o?.type === 'item' && +o.hp > 0;
+
 function buildItem(o, ctx) {
   const group = new THREE.Group();
   const body = buildItemBody(o);
-  body.position.y = Math.max(0.2, o.y ?? 0.6);
+  const breakable = isBreakable(o);
+  body.position.y = breakable ? 0 : Math.max(0.2, o.y ?? 0.6);
   body.userData.itemBody = true;
   group.add(body);
   // marcador do editor: anel no chão
@@ -551,7 +576,8 @@ function buildItem(o, ctx) {
   if (o.hidden) group.userData.startsHidden = true;
   group.position.set(o.x, ctx.levelY(o.levelId), o.z);
   group.rotation.y = o.rotY || 0;
-  group.traverse((m) => { m.userData.collider = false; });
+  // quebrável é sólido (o player sobe nele e os tiros acertam); coletável é atravessável
+  group.traverse((m) => { m.userData.collider = breakable && m.isMesh && !m.userData.editorOnly; });
   return group;
 }
 
