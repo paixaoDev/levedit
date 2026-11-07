@@ -29,15 +29,19 @@ export function corridorSamples(o, ctx) {
   const stairs = o.rampStyle === 'stairs' && Math.abs(y1 - y0) > 1e-3;
   const s = samplePath(o.points, { closed: o.closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
   if (s.length < 2) return { samples: s, y0, y1 };
+  const L = s[s.length - 1].s;
+  // a subida só acontece fora das salas onde as pontas nascem/terminam (dentro
+  // delas o piso fica plano, senão o primeiro degrau aparece alto na porta)
+  const [sA, sB] = y1 === y0 ? [0, L] : climbRange(o, s, ctx, y0, y1);
+  const span = Math.max(1e-6, sB - sA);
   if (!stairs) {
-    for (const p of s) p.y = lerp(y0, y1, y1 === y0 ? 0 : smoothstep(p.u));
+    for (const p of s) p.y = lerp(y0, y1, y1 === y0 ? 0 : smoothstep(Math.max(0, Math.min(1, (p.s - sA) / span))));
     return { samples: s, y0, y1 };
   }
   // Degraus: insere fronteiras exatas de cada degrau ao longo do arco
-  const L = s[s.length - 1].s;
   const rise = y1 - y0;
   const N = Math.max(1, Math.round(Math.abs(rise) / Math.max(0.05, o.stepHeight || 0.25)));
-  const tread = L / N;
+  const tread = span / N;
   const stepY = (k) => y0 + (rise * k) / N;
   const out = [];
   const at = (sv) => {
@@ -48,16 +52,51 @@ export function corridorSamples(o, ctx) {
     return { x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), s: sv, u: sv / L, ctrl: lerp(a.ctrl, b.ctrl, f) };
   };
   const marks = new Set(s.map((p) => +p.s.toFixed(4)));
-  for (let k = 1; k <= N; k++) marks.add(+(k * tread).toFixed(4));
+  for (let k = 1; k <= N; k++) marks.add(+(sA + k * tread).toFixed(4));
   const sorted = [...marks].sort((a, b) => a - b);
   for (const sv of sorted) {
-    const k = Math.min(N, Math.floor((sv + 1e-4) / tread));
+    const k = Math.max(0, Math.min(N, Math.floor((sv - sA + 1e-4) / tread)));
     const p = at(Math.min(L, sv));
-    const isBoundary = k > 0 && Math.abs(sv - k * tread) < 2e-3;
+    const isBoundary = k > 0 && Math.abs(sv - sA - k * tread) < 2e-3;
     if (isBoundary) out.push({ ...p, y: stepY(k - 1) });
     out.push({ ...p, y: stepY(k) });
   }
-  return { samples: out, y0, y1, stepped: { y0, rise, step: Math.abs(rise) / N } };
+  return { samples: out, y0, y1, stepped: { y0, rise, step: Math.abs(rise) / N, sA, sB, at: (sv) => y0 + rise * Math.max(0, Math.min(1, (sv - sA) / span)) } };
+}
+
+/**
+ * Trecho [sA, sB] do corredor onde a rampa/escada sobe: começa depois de sair da
+ * área do andar de partida em que a ponta inicial está e termina antes de entrar
+ * na área do andar de chegada em que a ponta final está (com folga da parede).
+ */
+function climbRange(o, s, ctx, y0, y1) {
+  const L = s[s.length - 1].s;
+  const objs = ctx.doc?.objects;
+  if (!objs || o.closed) return [0, L];
+  const outlines = (y) => objs.filter((a) => a.type === 'area' && a.points?.length >= 3 && Math.abs(ctx.levelY(a.levelId) - y) < 1e-3)
+    .map((a) => ({ pts: samplePath(a.points, { closed: true, smooth: a.smooth, spacing: 0.5 }), pad: (a.walls?.enabled ? a.walls.thickness : 0) / 2 + 0.3 }));
+  const inside = (list, p) => list.some((a) => pointInPoly(a.pts, p) || (closestOnPolyline(a.pts, p, true)?.d ?? 9) < a.pad);
+  const exitFrom = (list, fromStart) => {
+    const hit = list.filter((a) => pointInPoly(a.pts, fromStart ? s[0] : s[s.length - 1]));
+    if (!hit.length) return fromStart ? 0 : L;
+    const idx = fromStart ? [...s.keys()] : [...s.keys()].reverse();
+    for (const i of idx) if (!inside(hit, s[i])) return s[i].s;
+    return fromStart ? 0 : L;
+  };
+  let sA = exitFrom(outlines(y0), true);
+  let sB = exitFrom(outlines(y1), false);
+  // nunca deixa a subida curta demais (fica íngreme): mínimo de 40% do corredor
+  if (sB - sA < L * 0.4) { sA = 0; sB = L; }
+  return [sA, sB];
+}
+
+function pointInPoly(pts, p) {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.z > p.z) !== (b.z > p.z) && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) c = !c;
+  }
+  return c;
 }
 
 export const JOIN_STYLES = { door: 'Porta (batente)', open: 'Abertura livre', none: 'Sem abertura' };
@@ -209,9 +248,21 @@ function connectEnd(info, b, end, ei, fb, P) {
     } else {
       s0 = P.s - hb / P.sinA; s1 = P.s + hb / P.sinA;
     }
+    // altura do piso de B onde ele atravessa a parede de P (escada/rampa que
+    // chega a uma sala ainda subindo: a porta precisa ser mais alta ali)
+    const sAt = end === 'start' ? trim.walls : Lb - trim.walls;
+    let floorY = null;
+    for (let k = 1; k < sb.length; k++) {
+      if (sb[k].s >= sAt || k === sb.length - 1) {
+        const a0 = sb[k - 1], a1 = sb[k];
+        const f = a1.s - a0.s > 1e-6 ? Math.max(0, Math.min(1, (sAt - a0.s) / (a1.s - a0.s))) : 0;
+        if (a0.y != null && a1.y != null) floorY = a0.y + (a1.y - a0.y) * f;
+        break;
+      }
+    }
     info.get(P.id).cuts.push({
       side: P.side, s0, s1, s: (s0 + s1) / 2, half: (s1 - s0) / 2, style, from: b.id, y: P.y,
-      wallH: P.wallH, height: Math.min(b.walls.height, P.wallH),
+      wallH: P.wallH, height: Math.min(b.walls.height, P.wallH), floorY,
     });
   }
 }

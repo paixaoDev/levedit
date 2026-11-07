@@ -81,21 +81,30 @@ function pointAtS(line, sv) {
   return { x: lerp(a.x, b.x, f), z: lerp(a.z, b.z, f), y: lerp(a.y ?? 0, b.y ?? 0, f), s: sv };
 }
 
+/** Altura mínima de uma porta (o player tem 1,8 m). */
+const DOOR_MIN = 2.2;
+
 /** Batente (montantes + verga + parede acima) de uma porta entre s0 e s1 de uma linha de parede. */
 function buildDoorFrame(group, center, s0, s1, c, W, extra = 0) {
   const a = pointAtS(center, s0), b = pointAtS(center, s1);
   const y = Math.min(a.y, b.y);
   const H = W.height + extra;
-  const doorH = Math.min(2.5, c.height - 0.2, H - 0.25);
+  // a porta sempre deixa o player passar em pé: corredor de mureta baixa não
+  // derruba a altura da porta da sala, e parede baixa demais vira vão aberto
+  // corredor em escada/rampa que cruza a parede acima do chão da sala: a porta sobe junto
+  const rise = c.floorY != null ? Math.max(0, c.floorY - y) : 0;
+  const doorH = Math.min(2.5 + rise, Math.max(DOOR_MIN, c.height - 0.2) + rise, H - 0.25);
+  const open = H - 0.25 < DOOR_MIN + rise;
   const postW = 0.18;
   const dx = b.x - a.x, dz = b.z - a.z, dl = Math.hypot(dx, dz) || 1;
   const ux = dx / dl, uz = dz / dl;
   const frameColor = shade(W.color, -0.18);
   const post = (p, dir) => makeMesh(boxBetween(
     { x: p.x, z: p.z }, { x: p.x + ux * dir * postW, z: p.z + uz * dir * postW },
-    W.thickness + 0.12, y, doorH,
+    W.thickness + 0.12, y, open ? H : doorH,
   ), frameColor);
   group.add(post(a, 1), post(b, -1));
+  if (open) return;
   if (H - doorH > 0.05) group.add(makeMesh(boxBetween(a, b, W.thickness, y + doorH, H - doorH), W.color));
   group.add(makeMesh(boxBetween(a, b, W.thickness + 0.12, y + doorH - 0.12, 0.12), frameColor));
 }
@@ -159,8 +168,7 @@ function buildCorridor(o, ctx) {
   let wallBase = raw, extra = 0;
   if (stepped) {
     wallBase = samplePath(o.points, { closed, smooth: o.smooth, spacing: o.proc?.segment || 1 });
-    const LL = wallBase[wallBase.length - 1].s || 1;
-    for (const p of wallBase) p.y = stepped.y0 + (stepped.rise * p.s) / LL - stepped.step;
+    for (const p of wallBase) p.y = stepped.at(p.s) - stepped.step;
     extra = stepped.step;
   }
   const wallSamples = closed ? wallBase : trimRange(wallBase, trim('start', 'walls'), L - trim('end', 'walls'));
@@ -189,7 +197,7 @@ function buildCorridor(o, ctx) {
   if (o.roof?.enabled) {
     // teto apoiado no topo das paredes, cobrindo até a face externa delas
     const R = o.roof;
-    const topY = (p) => (stepped ? stepped.y0 + (stepped.rise * p.s) / (L || 1) : p.y ?? 0) + W.height + R.thickness;
+    const topY = (p) => (stepped ? stepped.at(p.s) : p.y ?? 0) + W.height + R.thickness;
     const out = (side) => untangle(offsetPoints(samples, frames, (i) => side * (halfS(samples[i], side, frames[i]) + W.thickness)), { keepLength: true, ref: samples })
       .map((p, i) => ({ ...p, y: topY(samples[i]) }));
     group.add(makeRoofMesh(floorGeometry(out(1), out(-1), R.thickness, { closed }), R.color));
