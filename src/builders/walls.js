@@ -59,7 +59,8 @@ export function buildWallLine(center, o) {
   if (o.cuts?.length) {
     for (let k = 0; k < segs; k++) {
       const a = pts[k], b = pts[(k + 1) % n];
-      const sa = a.s ?? k, sb = b.s ?? k + 1;
+      // trecho que fecha o anel (último ponto -> primeiro): o arco segue além do total
+      const sa = a.s ?? k, sb = k + 1 < n ? (b.s ?? k + 1) : sa + Math.hypot(b.x - a.x, b.z - a.z);
       if (o.cuts.some((c) => sb > c.s0 + 1e-3 && sa < c.s1 - 1e-3)) gap[k] = true;
     }
   }

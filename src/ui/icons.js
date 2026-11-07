@@ -7,6 +7,8 @@ export const TOOL_ICONS = {
   connector: 'M4 20h4v-4h4v-4h4V8h4',
   asset: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5',
   agent: 'M12 3a3 3 0 1 0 0.01 0z M7 21v-6a5 5 0 0 1 10 0v6',
+  item: 'M8.5 5a3.5 3.5 0 1 0 .01 0z M11 10.5l8 8 M16 15.5l2-2 M18 17.5l2-2',
+  zone: 'M4 8V4h4 M16 4h4v4 M20 16v4h-4 M8 20H4v-4 M10 12l2-2 2 2-2 2z',
   light: 'M9 18h6 M10 21h4 M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z',
 };
 
@@ -24,6 +26,11 @@ export const UI_ICONS = {
   play: 'M8 5v14l11-7z',
   dice: 'M5 5h14v14H5z M9 9h.01 M15 15h.01 M15 9h.01 M9 15h.01',
   upload: 'M12 16V4 M7 9l5-5 5 5 M5 20h14',
+  logic: 'M4 5h6v5H4z M14 14h6v5h-6z M7 10v4a2 2 0 0 0 2 2h5 M17 14V9a2 2 0 0 0-2-2h-5',
+  plus: 'M12 5v14 M5 12h14',
+  bolt: 'M13 3L5 14h6l-1 7 8-11h-6z',
+  code: 'M8 7l-5 5 5 5 M16 7l5 5-5 5 M14 4l-4 16',
+  flag: 'M5 21V4 M5 4h11l-2 4 2 4H5',
 };
 
 /** SVG inline de um caminho de ícone. */

@@ -7,6 +7,7 @@ import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
 import { Panels } from './ui/panels.js';
 import { LightingMenu } from './ui/lighting.js';
+import { LogicDialog } from './ui/logicDialog.js';
 import { TOOL_ICONS, UI_ICONS, svgIcon } from './ui/icons.js';
 import { PlayMode } from './play/play.js';
 import { emptyDoc } from './model.js';
@@ -33,6 +34,7 @@ class App {
     this.play = new PlayMode(this.vp, this.store);
     this.panels = new Panels(this);
     this.lightMenu = new LightingMenu(this);
+    this.logic = new LogicDialog(this);
     this.buildToolbar();
     this.bindTouchUi();
     this.bindTips();
@@ -49,7 +51,7 @@ class App {
   // ------------------------------------------------------------ UI
   buildToolbar() {
     const bar = document.getElementById('toolbar');
-    const groups = [['select'], ['corridor', 'area', 'wall'], ['connector', 'asset', 'light', 'agent']];
+    const groups = [['select'], ['corridor', 'area', 'wall'], ['connector', 'asset', 'light', 'agent'], ['item', 'zone']];
     for (const g of groups) {
       const box = document.createElement('div');
       box.className = 'dock-group';
@@ -92,7 +94,7 @@ class App {
     // escolher asset/agente precisa do painel: abre sozinho no celular
     this.tools.addEventListener('toolchange', (e) => {
       const t = e.detail.tool;
-      if ((t === 'asset' || t === 'agent') && !this.sheet && this.isNarrow()) this.setSheet('props');
+      if ((t === 'asset' || t === 'agent' || t === 'item') && !this.sheet && this.isNarrow()) this.setSheet('props');
     });
     // abrir um objeto pela lista leva às propriedades dele
     document.getElementById('outliner').addEventListener('click', (e) => {
@@ -155,7 +157,7 @@ class App {
       const sel = this.store.get(this.store.selection);
       if (sel || t.multiSelect) items.push(btn('multi', 'Vários', 'M4 4h7v7H4z M13 13h7v7h-7z M17 4v6 M14 7h6', t.multiSelect ? 'on' : '', { pressed: t.multiSelect }));
       if (sel) {
-        if (['asset', 'agent', 'connector', 'light'].includes(sel.type) && this.store.multi.size === 1) items.push(btn('rotate', 'Girar', UI_ICONS.reset, 'compact'));
+        if (['asset', 'agent', 'connector', 'light', 'item', 'zone'].includes(sel.type) && this.store.multi.size === 1) items.push(btn('rotate', 'Girar', UI_ICONS.reset, 'compact'));
         if (this.store.multi.size === 1) items.push(btn('dup', 'Duplicar', UI_ICONS.copy, 'compact'));
         items.push(btn('del', 'Excluir', UI_ICONS.trash, 'danger'));
       }
@@ -199,6 +201,7 @@ class App {
     $('view-3d').addEventListener('click', () => this.setView('3d'));
     $('view-top').addEventListener('click', () => this.setView('top'));
     $('btn-snap').addEventListener('click', () => this.toggleSnap());
+    $('btn-logic').addEventListener('click', () => this.logic.open());
     $('btn-play').addEventListener('click', () => (this.play.active ? this.play.stop() : this.startPlay()));
     new ResizeObserver(() => { this.vp.resize(); if (this.play.active) this.play.resize(); }).observe(this.vp.container);
     const name = $('doc-name');
@@ -329,6 +332,7 @@ class App {
 
   onKey(e) {
     if (this.play.active) return;
+    if (document.querySelector('dialog[open]')) return; // janela aberta: Esc fecha ela, atalhos ficam parados
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
       if (e.key === 'Escape') document.activeElement.blur();

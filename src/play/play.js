@@ -7,6 +7,9 @@ import { samplePath } from '../math/curve.js';
 import { normalizeObject, makeObject } from '../model.js';
 import { applyVisualState } from '../render/materials.js';
 import { TouchControls, prefersTouch } from './touchControls.js';
+import { LogicRuntime } from '../logic/runtime.js';
+import { LevelScript } from '../logic/script.js';
+import { GOALS } from '../logic/schema.js';
 
 const V = () => new THREE.Vector3();
 
@@ -45,6 +48,19 @@ export class PlayMode {
       if (o?.type === 'agent') g.visible = false;
     }
     this.vp.helpers.visible = false;
+    // estado inicial de assets e itens definido para o jogo (antes de montar a colisão)
+    this.assetState = new Map();
+    for (const o of doc.objects) {
+      const g = this.vp.objects.get(o.id);
+      if (!g) continue;
+      if (o.type === 'asset') {
+        const st = { g, baseY: g.position.y, open: false, hidden: false, anim: null };
+        this.assetState.set(o.id, st);
+        if (o.startState === 'hidden') { st.hidden = true; g.visible = false; }
+        if (o.startState === 'open') { st.open = true; g.position.y = st.baseY - this.sinkDepth(g); g.visible = false; }
+      }
+      if (o.type === 'item' && o.hidden) g.visible = false;
+    }
     const minY = Math.min(...doc.levels.map((l) => l.elevation));
     this.world = new World(this.vp.root, { groundY: minY, solidGround: doc.settings.solidGround });
     this.minY = minY;
@@ -69,10 +85,22 @@ export class PlayMode {
       g.traverse((m) => { if (m.userData.editorOnly) m.visible = false; });
     }
     this.enemies = agents.filter((a) => a.role === 'enemy').map((a) => this.makeEnemy(normalizeObject(JSON.parse(JSON.stringify(a)))));
+    for (const e of this.enemies) if (e.o.active === false) { e.dormant = true; e.mesh.visible = false; }
+    this.items = doc.objects.filter((o) => o.type === 'item').map((o) => {
+      const g = this.vp.objects.get(o.id);
+      return { o, g, body: g?.children.find((c) => c.userData.itemBody), taken: false, hidden: !!o.hidden, phase: Math.random() * 6 };
+    }).filter((it) => it.g);
+    this.zones = doc.objects.filter((o) => o.type === 'zone').map((o) => ({ o, inside: false, off: false }));
+    const useRules = new Set((doc.logic?.rules || []).filter((r) => r.when?.type === 'use').map((r) => r.when.target));
+    for (const z of this.zones) z.usable = z.o.usable || useRules.has(z.o.id);
+    this.anims = [];
     this.projectiles = [];
     this.effects = [];
     this.stats = { kills: 0, deaths: 0, time: 0 };
     this.cleared = false;
+    this.ended = null;
+    this.paused = false;
+    this.scriptT = 0;
 
     this.buildHud();
     if (prefersTouch()) {
@@ -93,6 +121,316 @@ export class PlayMode {
     window.addEventListener('blur', this._onBlur);
     window.addEventListener('resize', this._onResize);
     this.dispatch('start');
+    this.startLogic(doc);
+  }
+
+  // ------------------------------------------------------------- lógica (regras + script)
+  startLogic(doc) {
+    const logic = doc.logic || {};
+    this.logic = new LogicRuntime(logic, {
+      act: (a) => this.act(a),
+      isEnemyDead: (id) => { const e = this.enemyById(id); return e ? !e.alive : false; },
+      enemiesLeft: (withDormant) => this.enemies.filter((e) => e.alive && (withDormant || !e.dormant)).length,
+      totalItems: () => this.items.length,
+      playerHealth: () => this.player.health,
+      onState: () => this.renderInventory(),
+      onEvent: (type, target) => this.script?.send(type, target, this.scriptState()),
+    });
+    // scripts: o do level e os de cada objeto rodam juntos num worker isolado
+    const parts = [];
+    if (logic.scriptEnabled && logic.script?.trim()) parts.push({ code: logic.script });
+    for (const o of doc.objects) {
+      if (o.script?.trim() && o.scriptEnabled !== false) parts.push({ code: o.script, me: { id: o.id, name: o.name, type: o.type, role: o.role || null } });
+    }
+    if (parts.length) {
+      this.script = new LevelScript(parts,
+        (actions) => this.runScriptActions(actions),
+        (msg) => { this.toast(`Erro no script: ${msg}`, 5); console.warn('[levedit script]', msg); });
+    }
+    const g = logic.goal || { type: 'killAll' };
+    this.objectiveText = g.type === 'reachZone' ? `Objetivo: chegar em ${this.store.get(g.zoneId)?.name || 'zona'}`
+      : g.type === 'survive' ? `Objetivo: sobreviver ${g.seconds || 60}s`
+      : g.type === 'rules' ? '' : `Objetivo: ${GOALS[g.type]?.label.toLowerCase() || ''}`;
+    if (this.hudGoal) this.hudGoal.textContent = this.objectiveText;
+    this.logic.start();
+    this.renderInventory();
+  }
+
+  /** Ações vindas do script: alvos por nome viram ids antes de ir para o executor. */
+  runScriptActions(actions) {
+    if (!this.active || !this.logic) return;
+    const fixed = actions.map((a) => {
+      if (!a || typeof a !== 'object') return null;
+      const b = { ...a };
+      if (b.target != null && !['addVar', 'setVar', 'enableRule', 'disableRule'].includes(b.type)) {
+        const o = this.resolve(b.target);
+        b.target = o ? o.id : b.target;
+      }
+      return b;
+    }).filter(Boolean);
+    this.logic.runActions(fixed);
+  }
+
+  /** Retrato do jogo mandado ao script. */
+  scriptState() {
+    const pl = this.player;
+    const names = {};
+    for (const o of this.store.doc.objects) names[o.name] = o.id;
+    const snap = this.logic.snapshot();
+    return {
+      ...snap,
+      names,
+      player: { id: pl.o.id, name: pl.o.name, x: pl.body.pos.x, y: pl.body.pos.y, z: pl.body.pos.z, health: pl.health, maxHealth: pl.p.health, dead: pl.dead > 0, mode: pl.mode, params: { ...pl.p } },
+      enemies: this.enemies.map((e) => ({ id: e.o.id, name: e.o.name, x: e.body.pos.x, y: e.body.pos.y, z: e.body.pos.z, alive: e.alive, awake: !e.dormant, health: e.health, behavior: e.o.behavior })),
+      objects: [...this.assetState].map(([id, st]) => ({ id, name: this.store.get(id)?.name, x: st.g.position.x, y: st.g.position.y, z: st.g.position.z, open: st.open, hidden: st.hidden })),
+    };
+  }
+
+  /** Objeto do level por id ou nome ('player' é o player). */
+  resolve(t) {
+    if (t == null || t === '') return null;
+    if (t === 'player') return this.player.o;
+    const doc = this.store.doc;
+    return doc.objects.find((o) => o.id === t) || doc.objects.find((o) => o.name === t) || null;
+  }
+
+  enemyById(id) { return this.enemies.find((e) => e.o.id === id) || null; }
+
+  sinkDepth(g) { return (g.userData.height || 2) + 0.1; }
+
+  /** Ações que mexem na cena (o runtime cuida de contadores, itens e regras). */
+  act(a) {
+    const o = this.resolve(a.target);
+    const id = o?.id;
+    const pl = this.player;
+    switch (a.type) {
+      case 'open': case 'close': case 'toggle': {
+        const st = this.assetState.get(id);
+        if (!st) break;
+        const open = a.type === 'open' ? true : a.type === 'close' ? false : !st.open;
+        if (open === st.open) break;
+        st.open = open;
+        st.g.visible = !st.hidden;
+        const to = open ? st.baseY - this.sinkDepth(st.g) : st.baseY;
+        if (open) this.world.setEnabled(st.g, false);
+        this.animate(st, { y: to }, 0.9, () => {
+          if (st.open) st.g.visible = false;
+          else if (!st.hidden) this.world.setEnabled(st.g, true);
+        });
+        if (!open && !st.hidden) this.world.setEnabled(st.g, true);
+        break;
+      }
+      case 'show': case 'hide': {
+        const show = a.type === 'show';
+        const st = this.assetState.get(id);
+        if (st) {
+          st.hidden = !show;
+          st.g.visible = show && !st.open;
+          this.world.setEnabled(st.g, show && !st.open);
+          if (show) this.burst(st.g.position.clone().add(V().set(0, 1, 0)), 0xd9a441, 8);
+          break;
+        }
+        const it = this.items.find((x) => x.o.id === id);
+        if (it) { it.hidden = !show; it.g.visible = show && !it.taken; break; }
+        const z = this.zones.find((x) => x.o.id === id);
+        if (z) { z.off = !show; break; }
+        const e = this.enemyById(id);
+        if (e) show ? this.wake(e) : (e.dormant = true, e.mesh.visible = false);
+        break;
+      }
+      case 'spawn': { const e = this.enemyById(id); if (e) this.wake(e); break; }
+      case 'kill': { const e = this.enemyById(id); if (e?.alive && !e.dormant) this.damageEnemy(e, Infinity); break; }
+      case 'behavior': { const e = this.enemyById(id); if (e && a.value) { e.o.behavior = a.value; e.goTo = null; } break; }
+      case 'goTo': {
+        const e = this.enemyById(id);
+        if (e) { e.goTo = a.value && isFinite(a.value.x) ? V().set(+a.value.x, e.body.pos.y, +a.value.z) : null; break; }
+        const st = this.assetState.get(id);
+        if (st && a.value && isFinite(a.value.x)) this.moveAsset(st, a.value);
+        break;
+      }
+      case 'moveTo': {
+        const st = this.assetState.get(id);
+        if (st && a.value) this.moveAsset(st, a.value);
+        break;
+      }
+      case 'rotate': {
+        const st = this.assetState.get(id);
+        if (st) this.animate(st, { rotY: st.g.rotation.y + ((+a.value || 0) * Math.PI) / 180 }, Math.max(0.05, +a.seconds || 0.6), () => this.world.setEnabled(st.g, !st.hidden && !st.open));
+        break;
+      }
+      case 'color': {
+        const g = this.vp.objects.get(id) || this.enemyById(id)?.mesh || (id === pl.o.id ? pl.mesh : null);
+        if (g && a.value) g.traverse((m) => { if (m.isMesh && m.material?.color && !m.userData.editorOnly) { m.material = m.material.clone(); m.material.color.set(a.value); } });
+        break;
+      }
+      case 'param': {
+        const tgt = id === pl.o.id || a.target === 'player' ? pl : this.enemyById(id);
+        if (tgt && a.key) {
+          tgt.p[a.key] = a.value;
+          if (a.key === 'health' && tgt === pl) pl.health = Math.min(pl.health, +a.value || 1);
+        }
+        break;
+      }
+      case 'push': {
+        const v = a.value || {};
+        if (pl.body.vel) { pl.body.vel.x += +v.x || 0; pl.body.vel.y += +v.y || 0; pl.body.vel.z += +v.z || 0; pl.body.onGround = false; }
+        if (pl.mode === 'car') pl.body.vy = (pl.body.vy || 0) + (+v.y || 0);
+        break;
+      }
+      case 'message': this.toast(a.text || '', +a.value || 3); break;
+      case 'teleport': {
+        if (!o) break;
+        const g = this.vp.objects.get(o.id);
+        const p = g ? g.position.clone() : V().set(o.x, this.ctx.levelY(o.levelId), o.z);
+        p.y += 0.3;
+        const gr = this.world.ground(p, 1.5);
+        if (gr) p.y = gr.y;
+        pl.body.pos.copy(p);
+        if (pl.body.vel) pl.body.vel.set(0, 0, 0);
+        if (pl.mode === 'car') pl.body.speed = 0;
+        this.burst(p.clone().add(V().set(0, 1, 0)), 0x6d9bb8, 12);
+        break;
+      }
+      case 'heal': pl.health = Math.min(pl.p.health, pl.health + (+a.value || 0)); break;
+      case 'damage': this.damagePlayer(+a.value || 0); break;
+      case 'win': case 'lose': this.showEnd(a.type === 'win', a.text); break;
+      default: break;
+    }
+  }
+
+  wake(e) {
+    if (!e.alive) {
+      e.alive = true;
+      e.health = e.p.health;
+      e.body.pos.copy(e.spawn);
+      if (e.body.vel) e.body.vel.set(0, 0, 0);
+      this.runtime.add(e.mesh);
+    }
+    if (e.dormant || !e.mesh.visible) this.burst(e.body.pos.clone().add(V().set(0, 1, 0)), new THREE.Color(e.o.color).getHex(), 12);
+    e.dormant = false;
+    e.mesh.visible = true;
+    e.mesh.position.copy(e.body.pos);
+  }
+
+  moveAsset(st, to) {
+    const target = { x: +to.x, z: +to.z };
+    if (to.y != null && isFinite(to.y)) target.y = st.baseY + +to.y;
+    this.animate(st, target, Math.max(0.05, +to.seconds || 1), () => {
+      if (target.y != null) st.baseY = target.y;
+      if (!st.hidden && !st.open) this.world.setEnabled(st.g, true);
+    });
+  }
+
+  /** Anima posição/rotação de um asset; a colisão é refeita no fim. */
+  animate(st, to, dur, done) {
+    const g = st.g;
+    const from = { x: g.position.x, y: g.position.y, z: g.position.z, rotY: g.rotation.y };
+    this.anims = this.anims.filter((a) => a.st !== st || Object.keys(a.to).some((k) => !(k in to)));
+    this.anims.push({ st, from, to, t: 0, dur, done });
+  }
+
+  updateAnims(dt) {
+    for (let i = this.anims.length - 1; i >= 0; i--) {
+      const a = this.anims[i];
+      a.t = Math.min(1, a.t + dt / a.dur);
+      const k = a.t * a.t * (3 - 2 * a.t);
+      const g = a.st.g;
+      for (const key of Object.keys(a.to)) {
+        const v = a.from[key] + (a.to[key] - a.from[key]) * k;
+        if (key === 'rotY') g.rotation.y = v; else g.position[key] = v;
+      }
+      if (a.t >= 1) { this.anims.splice(i, 1); a.done?.(); }
+    }
+  }
+
+  /** Itens: giram, flutuam e são coletados ao encostar. */
+  updateItems(dt) {
+    const pl = this.player;
+    const pp = pl.body.pos;
+    const r = pl.mode === 'car' ? 2.2 : 1.2;
+    for (const it of this.items) {
+      if (it.taken || it.hidden) continue;
+      it.phase += dt;
+      if (it.body) {
+        it.body.rotation.y += dt * 2;
+        it.body.position.y = Math.max(0.2, it.o.y ?? 0.6) + Math.sin(it.phase * 2.5) * 0.12;
+      }
+      const gp = it.g.position;
+      if (pl.dead <= 0 && Math.hypot(gp.x - pp.x, gp.z - pp.z) < r && pp.y > gp.y - 1.2 && pp.y < gp.y + 2.2) {
+        it.taken = true;
+        it.g.visible = false;
+        this.burst(gp.clone().add(V().set(0, 0.8, 0)), new THREE.Color(it.o.color).getHex(), 10);
+        if (it.o.kind === 'health') pl.health = Math.min(pl.p.health, pl.health + (+it.o.amount || 25));
+        this.toast(`Pegou: ${it.o.name}`, 1.6);
+        this.logic.addItem(it.o.id, 1, true);
+      }
+    }
+  }
+
+  /** Zonas: entrar, sair e usar (F ou botão). */
+  updateZones() {
+    const pl = this.player;
+    const p = pl.body.pos;
+    let usable = null;
+    for (const z of this.zones) {
+      const o = z.o;
+      const y0 = this.ctx.levelY(o.levelId);
+      const dx = p.x - o.x, dz = p.z - o.z;
+      const c = Math.cos(-(o.rotY || 0)), s = Math.sin(-(o.rotY || 0));
+      const lx = dx * c + dz * s, lz = -dx * s + dz * c;
+      const inside = !z.off && pl.dead <= 0 && Math.abs(lx) <= o.w / 2 && Math.abs(lz) <= o.d / 2 && p.y >= y0 - 0.6 && p.y <= y0 + o.h;
+      if (inside && !z.inside) { z.inside = true; this.logic.emit('enter', o.id); }
+      else if (!inside && z.inside) { z.inside = false; this.logic.emit('exit', o.id); }
+      if (z.inside && z.usable) usable = z;
+    }
+    this.usableZone = usable;
+    if (this.hudUse) {
+      this.hudUse.hidden = !usable;
+      if (usable) this.hudUse.querySelector('span').textContent = `${usable.o.useLabel || 'Usar'} · ${usable.o.name}`;
+    }
+    if (this.usePressed && usable) this.logic.emit('use', usable.o.id);
+    this.usePressed = false;
+  }
+
+  renderInventory() {
+    if (!this.hudInv || !this.logic) return;
+    const doc = this.store.doc;
+    const chips = [];
+    for (const [id, n] of this.logic.items) {
+      const o = doc.objects.find((x) => x.id === id);
+      if (!o || n <= 0 || o.kind === 'health') continue;
+      chips.push(`<span class="inv-chip" style="--c:${o.color}">${escapeHtml(o.name)}${n > 1 ? ` ×${n}` : ''}</span>`);
+    }
+    for (const [k, v] of this.logic.vars) chips.push(`<span class="inv-chip var">${escapeHtml(k)}: ${+v.toFixed?.(2) || v}</span>`);
+    this.hudInv.innerHTML = chips.join('');
+    this.hudInv.hidden = !chips.length;
+  }
+
+  showEnd(win, text) {
+    this.ended = { win, text };
+    this.paused = true;
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (!this.hud) return;
+    this.hudEnd?.remove();
+    const box = document.createElement('div');
+    box.className = `hud-end ${win ? 'win' : 'lose'}`;
+    box.innerHTML = `<div class="hud-end-card">
+      <div class="eyebrow">${win ? 'Vitória' : 'Derrota'}</div>
+      <h3>${escapeHtml(text || (win ? 'Você venceu!' : 'Fim de jogo'))}</h3>
+      <p class="hud-end-stats">${this.stats.time.toFixed(0)}s · ${this.stats.kills} abates · ${this.stats.deaths} mortes · ${this.logic?.collected || 0} itens</p>
+      <div class="hud-end-actions">
+        ${win ? '<button class="btn" data-end="continue" type="button">Continuar explorando</button>' : ''}
+        <button class="btn primary" data-end="restart" type="button">Jogar de novo</button>
+        <button class="btn ghost" data-end="stop" type="button">Voltar ao editor</button>
+      </div></div>`;
+    box.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-end]')?.dataset.end;
+      if (act === 'continue') { box.remove(); this.paused = false; }
+      else if (act === 'restart') { this.stop(); this.start(); }
+      else if (act === 'stop') this.stop();
+    });
+    this.hud.append(box);
+    this.hudEnd = box;
   }
 
   stop() {
@@ -107,6 +445,10 @@ export class PlayMode {
     this.vp.controls.enabled = true;
     this.tc?.destroy();
     this.tc = null;
+    this.script?.stop();
+    this.script = null;
+    this.logic = null;
+    this.hudEnd = null;
     this.hud?.remove();
     this.hud = null;
     window.removeEventListener('keydown', this._onKeyDown);
@@ -199,6 +541,7 @@ export class PlayMode {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     if (e.code === 'Space' && !this.keys.has('Space')) this.jumpPressed = true;
     if (e.code === 'KeyR') this.respawn();
+    if (e.code === 'KeyF') this.usePressed = true;
     this.keys.add(e.code);
   }
 
@@ -242,6 +585,7 @@ export class PlayMode {
 
   // ------------------------------------------------------------- update
   update(dt) {
+    if (this.paused) { this.updateEffects(dt); return; }
     this.stats.time += dt;
     const pl = this.player;
     if (pl.dead > 0) {
@@ -255,9 +599,17 @@ export class PlayMode {
     }
     this.jumpPressed = false;
     if (this.tc) { this.tc.pressed.clear(); this.tc.takeLook(); } // nada fica guardado para o próximo quadro
-    for (const e of this.enemies) if (e.alive) this.updateEnemy(e, dt);
+    for (const e of this.enemies) if (e.alive && !e.dormant) this.updateEnemy(e, dt);
     this.updateProjectiles(dt);
     this.updateEffects(dt);
+    this.updateAnims(dt);
+    if (this.logic) {
+      this.updateItems(dt);
+      this.updateZones();
+      this.logic.update(dt);
+      this.scriptT -= dt;
+      if (this.script && this.scriptT <= 0) { this.scriptT = 0.2; this.script.send('tick', null, this.scriptState()); }
+    }
     this.updateHud(dt);
   }
 
@@ -303,7 +655,7 @@ export class PlayMode {
     let target = null;
     const rc = new THREE.Raycaster(origin, dir, 0, maxD);
     for (const e of this.enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || e.dormant) continue;
       const h = rc.intersectObject(e.mesh, true)[0];
       if (h && h.distance < maxD) { maxD = h.distance; target = e; }
     }
@@ -344,7 +696,7 @@ export class PlayMode {
     // stomp
     if (b.vel.y < -1) {
       for (const e of this.enemies) {
-        if (!e.alive) continue;
+        if (!e.alive || e.dormant) continue;
         const top = e.body.pos.y + (e.mode === 'car' ? 1.4 : e.mode === 'arcade' ? 1.2 : 1.9);
         const dh = Math.hypot(e.body.pos.x - b.pos.x, e.body.pos.z - b.pos.z);
         if (dh < (e.mode === 'car' ? 1.6 : 0.95) && b.pos.y > top - 0.6 && b.pos.y < top + 0.4) {
@@ -377,7 +729,7 @@ export class PlayMode {
     pl.mesh.rotation.z = -input.steer * Math.min(1, Math.abs(b.speed) / p.maxSpeed) * 0.06;
     // atropelar inimigos
     for (const e of this.enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || e.dormant) continue;
       e.ramCd = (e.ramCd || 0) - dt;
       if (e.body.pos.distanceTo(b.pos) < 2.1 && Math.abs(b.speed) > 5 && e.ramCd <= 0) {
         e.ramCd = 0.6;
@@ -413,15 +765,26 @@ export class PlayMode {
 
     let goal = null; // ponto para onde andar
     const behavior = e.o.behavior;
-    if (alerted && (behavior === 'chase' || e.mode === 'arcade' || (e.mode === 'car' && behavior !== 'idle'))) goal = pl.body.pos.clone();
+    const fromSpawn = Math.hypot(pl.body.pos.x - e.spawn.x, pl.body.pos.z - e.spawn.z);
+    if (e.goTo) goal = Math.hypot(e.goTo.x - b.pos.x, e.goTo.z - b.pos.z) > 0.8 ? e.goTo : null;
+    else if (behavior === 'flee') {
+      if (alerted) goal = b.pos.clone().add(b.pos.clone().sub(pl.body.pos).setY(0).normalize().multiplyScalar(6));
+      else goal = this.wanderGoal(e, dt);
+    } else if (behavior === 'guard') {
+      if (alerted && fromSpawn < (e.o.guardRadius || 8)) goal = pl.body.pos.clone();
+      else goal = Math.hypot(e.spawn.x - b.pos.x, e.spawn.z - b.pos.z) > 1 ? e.spawn : null;
+    } else if (behavior === 'idle' && e.mode !== 'arcade') goal = null;
+    else if (alerted && (behavior === 'chase' || e.mode === 'arcade' || (e.mode === 'car' && behavior !== 'idle'))) goal = pl.body.pos.clone();
     else if (behavior === 'patrol' && e.path.length) goal = this.patrolGoal(e);
     else if (behavior === 'wander' || (behavior === 'patrol' && !e.path.length)) goal = this.wanderGoal(e, dt);
     else if (behavior === 'chase' && !alerted) goal = this.wanderGoal(e, dt);
 
     if (e.mode === 'shooter') {
       // atirador mantém distância quando vê o player
-      if (sees && behavior !== 'chase') goal = null;
-      if (sees && behavior === 'chase' && dist < 8) goal = null;
+      if (!e.goTo && behavior !== 'flee') {
+        if (sees && behavior !== 'chase' && behavior !== 'guard') goal = null;
+        if (sees && (behavior === 'chase' || behavior === 'guard') && dist < 8) goal = null;
+      }
     }
 
     if (e.mode === 'car') {
@@ -472,7 +835,7 @@ export class PlayMode {
     const touchR = e.mode === 'car' ? 2.2 : e.mode === 'arcade' ? 1.1 : 0.9;
     const flat = Math.hypot(pl.body.pos.x - b.pos.x, pl.body.pos.z - b.pos.z);
     const vert = Math.abs(pl.body.pos.y - b.pos.y);
-    if (alivePlayer && flat < touchR && vert < 1.4 && e.hitCd <= 0 && (e.mode !== 'car' || Math.abs(b.speed) > 3)) {
+    if (alivePlayer && behavior !== 'flee' && flat < touchR && vert < 1.4 && e.hitCd <= 0 && (e.mode !== 'car' || Math.abs(b.speed) > 3)) {
       if (!(pl.mode === 'platform' && pl.body.vel.y < -1)) {
         e.hitCd = 0.9;
         this.damagePlayer(p.damage, b.pos);
@@ -517,9 +880,10 @@ export class PlayMode {
       this.runtime.remove(e.mesh);
       this.burst(e.body.pos.clone().add(V().set(0, 0.8, 0)), new THREE.Color(e.o.color).getHex(), 14);
       this.stats.kills++;
-      if (!this.cleared && this.enemies.every((x) => !x.alive)) {
+      this.logic?.emit('kill', e.o.id);
+      if (this.enemies.every((x) => !x.alive || x.dormant)) {
         this.cleared = true;
-        this.toast('Level limpo! Todos os inimigos derrotados.');
+        this.logic?.emit('allKilled');
       }
     }
   }
@@ -529,6 +893,7 @@ export class PlayMode {
     if (pl.dead > 0) return;
     pl.health -= dmg;
     pl.hurtFlash = 0.35;
+    this.logic?.emit('playerHurt', pl.o.id);
     if (from && pl.body.vel) {
       const push = pl.body.pos.clone().sub(from).setY(0).normalize().multiplyScalar(6);
       pl.body.vel.x += push.x; pl.body.vel.z += push.z;
@@ -538,6 +903,7 @@ export class PlayMode {
       pl.dead = 1.6;
       this.stats.deaths++;
       this.toast('Você morreu! Renascendo…');
+      this.logic?.emit('playerDied', pl.o.id);
     }
   }
 
@@ -636,7 +1002,9 @@ export class PlayMode {
         <div class="hud-card hud-stats"></div>
         <button class="btn hud-stop" type="button">■ Parar <kbd>Esc</kbd></button>
       </div>
+      <div class="hud-side"><div class="hud-goal"></div><div class="hud-inv" hidden></div></div>
       ${pl.mode === 'fps' ? '<div class="crosshair"></div>' : ''}
+      <button class="btn hud-use" type="button" hidden><kbd>F</kbd><span>Usar</span></button>
       <div class="hud-hurt"></div>
       <div class="hud-toast"></div>
       <div class="hud-help">${help[pl.mode]}</div>`;
@@ -647,6 +1015,11 @@ export class PlayMode {
     this.hudStats = hud.querySelector('.hud-stats');
     this.hudHurt = hud.querySelector('.hud-hurt');
     this.hudToast = hud.querySelector('.hud-toast');
+    this.hudGoal = hud.querySelector('.hud-goal');
+    this.hudInv = hud.querySelector('.hud-inv');
+    this.hudUse = hud.querySelector('.hud-use');
+    this.hudUse.addEventListener('click', () => { this.usePressed = true; });
+    this.hudUse.addEventListener('pointerdown', (e) => e.stopPropagation());
     if (this._pendingToast) { this.toast(this._pendingToast); this._pendingToast = null; }
   }
 
@@ -654,9 +1027,12 @@ export class PlayMode {
     if (!this.hud) return;
     const pl = this.player;
     this.hudFill.style.width = `${Math.max(0, (pl.health / pl.p.health) * 100)}%`;
-    const alive = this.enemies.filter((e) => e.alive).length;
+    const awake = this.enemies.filter((e) => !e.dormant);
+    const alive = awake.filter((e) => e.alive).length;
     const spd = pl.mode === 'car' ? ` · ${Math.round(Math.abs(pl.body.speed) * 3.6)} km/h` : '';
-    this.hudStats.textContent = `Inimigos ${alive}/${this.enemies.length} · Abates ${this.stats.kills} · Mortes ${this.stats.deaths} · ${this.stats.time.toFixed(0)}s${spd}`;
+    const limit = +this.store.doc.logic?.timeLimit || 0;
+    const clock = limit > 0 ? `${Math.max(0, limit - this.stats.time).toFixed(0)}s restantes` : `${this.stats.time.toFixed(0)}s`;
+    this.hudStats.textContent = `Inimigos ${alive}/${awake.length} · Abates ${this.stats.kills} · Mortes ${this.stats.deaths} · ${clock}${spd}`;
     pl.hurtFlash = Math.max(0, pl.hurtFlash - dt);
     this.hudHurt.style.opacity = String(pl.hurtFlash * 1.6);
     if (this._toastT > 0) {
@@ -665,11 +1041,11 @@ export class PlayMode {
     }
   }
 
-  toast(msg) {
+  toast(msg, seconds = 3) {
     if (!this.hudToast) { this._pendingToast = msg; return; }
     this.hudToast.textContent = msg;
     this.hudToast.classList.add('show');
-    this._toastT = 3;
+    this._toastT = seconds;
   }
 }
 

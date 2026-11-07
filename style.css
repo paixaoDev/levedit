@@ -679,3 +679,101 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
 
 /* objetos presos a outro objeto */
 .attach-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0 2px; font-size: 12px; }
+
+/* ------------------------------------------------------------ lógica do jogo */
+.logic-btn { gap: 6px; }
+.logic-dialog { max-width: 860px; padding: 0; display: none; }
+.logic-dialog[open] { display: flex; flex-direction: column; max-height: min(88dvh, 900px); }
+.logic-dialog .dialog-head { padding: 16px 20px 12px; border-bottom: 1px solid var(--line-soft); gap: 12px; margin: 0; }
+.logic-dialog .dialog-head h3 { flex: 1; }
+.logic-tabs button { display: inline-flex; align-items: center; gap: 6px; }
+.logic-dialog svg, .logic-card svg, .rule-list svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; width: 15px; height: 15px; }
+.logic-body { overflow-y: auto; padding: 12px 20px 22px; }
+.logic-sec-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 8px; }
+.logic-sec-head h4 { margin: 0; }
+.logic-sec-head .muted { flex: 1; font-size: 12px; }
+.logic-sec-head .chip-ico { color: var(--select); display: grid; }
+.logic-goal { background: var(--paper); border: 1px solid var(--line-soft); border-radius: 12px; padding: 4px 12px 10px; }
+.logic-goal .logic-sec-head { margin-top: 8px; }
+.logic-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.logic-row > label:first-child { width: 96px; color: var(--ink-2); font-size: 12px; }
+.logic-row .muted { font-size: 11.5px; }
+.logic-row .grow, .rule-line .grow { flex: 1; }
+.logic-templates { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.logic-templates .muted { font-size: 12px; margin-right: 2px; }
+.logic-empty { border: 1px dashed var(--line-mid); border-radius: 10px; padding: 14px; text-align: center; font-size: 12.5px; }
+.logic-dialog select, .logic-dialog input[type=text], .logic-dialog input[type=number] {
+  height: 30px; border: 1px solid var(--line-mid); border-radius: 7px; background: #fff; padding: 0 8px; font: inherit; font-size: 12.5px; color: var(--ink); max-width: 100%;
+}
+.logic-dialog select.op { width: 54px; }
+.logic-dialog input.num { width: 70px; }
+.num-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.num-wrap .unit { color: var(--muted); font-size: 12px; }
+.rule-card { border: 1px solid var(--line-mid); border-radius: 12px; padding: 10px 12px 8px; margin: 10px 0; background: #fff; box-shadow: var(--shadow-sm); }
+.rule-card.off { opacity: 0.6; }
+.rule-card.focus { border-color: var(--select); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rule-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.rule-head .rule-name { flex: 1; min-width: 140px; font-weight: 600; border-color: transparent !important; background: transparent !important; padding-left: 2px !important; }
+.rule-head .rule-name:focus { border-color: var(--line-mid) !important; background: #fff !important; }
+.rule-tools { display: flex; gap: 2px; }
+.rule-tools .up svg, .rule-line .up svg { transform: rotate(-90deg); }
+.rule-tools .down svg { transform: rotate(90deg); }
+.rule-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 0; border-top: 1px dashed var(--line-soft); }
+.rule-line:first-of-type { border-top: 0; }
+.kw { min-width: 52px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 8px; border-radius: 6px; text-align: center; }
+.kw.when { background: #e7eef4; color: #3d5f7f; }
+.kw.if { background: #f4efd9; color: #7d6522; }
+.kw.do { background: var(--accent-soft); color: var(--accent-ink); }
+.step-text { flex: 1; min-width: 140px; }
+.var-in { width: 120px; }
+.rule-add { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+.rule-add select.add-step { width: auto; background: var(--paper); }
+.rule-add select.add-step.primary { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-ink); }
+.rule-sum { flex: 1; text-align: right; font-size: 11.5px; min-width: 160px; }
+textarea.code {
+  width: 100%; font: 12px/1.5 var(--mono); color: var(--ink); background: #fbfaf6; border: 1px solid var(--line-mid); border-radius: 8px;
+  padding: 10px 12px; resize: vertical; tab-size: 2; white-space: pre; margin: 6px 0;
+}
+.api-ref pre.api { font: 11.5px/1.55 var(--mono); background: var(--paper); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 6px 0; color: var(--ink-2); }
+.logic-card .step-title { display: flex; align-items: center; gap: 6px; }
+.logic-card .step-title svg { color: var(--select); }
+.rule-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 4px; }
+.rule-list .btn { width: 100%; height: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; text-align: left; white-space: normal; }
+.rule-list .muted { font-size: 11.5px; }
+
+/* HUD: objetivo, inventário, botão usar e fim de jogo */
+.hud-side { position: absolute; top: 64px; left: 12px; display: grid; gap: 6px; max-width: 46%; }
+.hud-goal:empty { display: none; }
+.hud-goal { background: rgba(255, 254, 251, 0.94); border: 1px solid var(--line-mid); border-radius: 10px; padding: 6px 10px; font-weight: 600; box-shadow: var(--shadow-sm); justify-self: start; }
+.hud-inv { display: flex; flex-wrap: wrap; gap: 4px; }
+.inv-chip { background: rgba(255, 254, 251, 0.94); border: 1px solid var(--line-mid); border-left: 4px solid var(--c, var(--line)); border-radius: 8px; padding: 3px 8px; font-size: 11.5px; }
+.inv-chip.var { font-family: var(--mono); border-left-color: var(--line); }
+.hud-use { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); pointer-events: auto; gap: 8px; height: 40px; padding: 0 16px; box-shadow: var(--shadow); }
+.hud-use[hidden] { display: none; }
+.hud-use kbd { font: 600 11px var(--mono); border: 1px solid var(--line-mid); border-radius: 4px; padding: 1px 5px; }
+.hud-end { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(42, 37, 31, 0.35); pointer-events: auto; z-index: 5; padding: 16px; }
+.hud-end-card { background: var(--panel); border-radius: 16px; padding: 22px 26px; box-shadow: var(--shadow-lg); text-align: center; max-width: 420px; width: 100%; }
+.hud-end.win .eyebrow { color: #5f8f6a; }
+.hud-end.lose .eyebrow { color: var(--danger); }
+.hud-end-card .eyebrow { font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+.hud-end-card h3 { margin: 6px 0 4px; font-size: 20px; }
+.hud-end-stats { color: var(--ink-2); font-family: var(--mono); font-size: 12px; margin: 0 0 14px; }
+.hud-end-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.hud.touch .hud-side { top: 96px; }
+.hud.touch .hud-use { bottom: 200px; height: 48px; }
+
+@media (max-width: 900px) {
+  .logic-dialog { width: 100%; max-width: none; height: 100dvh; max-height: 100dvh !important; border-radius: 0; margin: 0; }
+  .logic-dialog .dialog-head { flex-wrap: wrap; padding: 12px 16px; }
+  .logic-body { padding: 10px 16px 24px; }
+  .logic-row > label:first-child { width: 100%; }
+  .rule-sum { text-align: left; }
+  .logic-btn span { display: none; }
+}
+.logic-dialog .switch, .rule-card .switch { width: auto; flex: none; white-space: nowrap; }
+body.playing .logic-btn { display: none; }
+@media (max-width: 900px) {
+  .logic-dialog .dialog-head h3 { font-size: 16px; }
+  .logic-dialog .logic-tabs { order: 3; width: 100%; }
+  .logic-dialog .logic-tabs button { flex: 1; justify-content: center; }
+}

@@ -216,6 +216,7 @@ export class Viewport {
       }
       if (m.isLine && !m.isLineSegments) { m.geometry.dispose(); m.material.dispose(); }
       if (m.userData.lightBulb) m.material.dispose();
+      if (m.userData.ownMaterial) { m.material.dispose(); if (!m.geometry.__shared) m.geometry.dispose(); }
       if (m.isLight) m.dispose();
     });
   }
@@ -238,6 +239,7 @@ export class Viewport {
       g.traverse((m) => {
         if (m.userData.editorOnly) m.visible = !this.playing;
         if (m.userData.pointLight) m.visible = lit && g.visible;
+        if (m.userData.zoneFill) m.material.opacity = state === 'selected' ? 0.26 : state === 'ghost' ? 0.05 : 0.12;
       });
     }
   }

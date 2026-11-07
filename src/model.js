@@ -97,6 +97,24 @@ export const TYPE_DEFAULTS = {
     topOffset: 0,
     // preso a outro asset: x, z, y e rotY passam a ser relativos a ele e ele carrega este junto
     parentId: null,
+    // modo jogo: como começa ('normal', 'hidden' = escondido até uma regra mostrar, 'open' = porta já aberta)
+    startState: 'normal',
+  },
+  item: {
+    name: 'Item',
+    kind: 'key',
+    x: 0, z: 0, y: 0.6, rotY: 0,
+    color: '#d9a441',
+    amount: 1, // vida recuperada (kind 'health') ou valor (moedas/gemas)
+    hidden: false, // começa escondido (uma regra mostra)
+  },
+  zone: {
+    name: 'Zona',
+    x: 0, z: 0, rotY: 0,
+    w: 4, d: 4, h: 3,
+    color: '#6d9bb8',
+    usable: false, // mostra "Usar (F)" quando o player está dentro
+    useLabel: 'Usar',
   },
   light: {
     name: 'Luz',
@@ -115,7 +133,19 @@ export const TYPE_DEFAULTS = {
     behavior: 'idle',
     pathId: null,
     params: {},
+    // modo jogo: inimigo começa dormindo (invisível) até uma regra "Despertar"
+    active: true,
+    // raio de guarda (comportamento "Guardar posição")
+    guardRadius: 8,
   },
+};
+
+export const ITEM_KINDS = {
+  key: 'Chave',
+  coin: 'Moeda',
+  gem: 'Gema',
+  health: 'Vida',
+  orb: 'Orbe',
 };
 
 export const ASSET_KINDS = {
@@ -159,6 +189,17 @@ export const BEHAVIORS = {
   wander: 'Vagar',
   patrol: 'Patrulhar caminho',
   chase: 'Perseguir',
+  guard: 'Guardar posição',
+  flee: 'Fugir do player',
+};
+
+// Lógica do jogo (modo de jogo + regras quando/se/então + script opcional).
+export const LOGIC_DEFAULTS = {
+  goal: { type: 'killAll', zoneId: null, seconds: 60 },
+  timeLimit: 0,
+  rules: [],
+  script: '',
+  scriptEnabled: false,
 };
 
 export function makeLevel(name, elevation) {
@@ -182,6 +223,8 @@ export function normalizeObject(obj) {
   }
   // paredes, corredores e áreas podem ir até outro andar (altura acompanha a elevação)
   if (['wall', 'corridor', 'area'].includes(obj.type)) withDefaults(obj, { topLevelId: null, topOffset: 0 });
+  // script próprio (modo avançado): player, inimigos, assets, itens e zonas
+  if (['agent', 'asset', 'item', 'zone'].includes(obj.type)) withDefaults(obj, { script: '', scriptEnabled: true });
   return obj;
 }
 
@@ -195,6 +238,7 @@ export function emptyDoc() {
     activeLevelId: l0.id,
     objects: [],
     customAssets: {},
+    logic: JSON.parse(JSON.stringify(LOGIC_DEFAULTS)),
   };
 }
 
@@ -203,5 +247,7 @@ export function normalizeDoc(doc) {
   if (!d.levels.length) d.levels.push(makeLevel('Térreo', 0));
   if (!d.levels.find((l) => l.id === d.activeLevelId)) d.activeLevelId = d.levels[0].id;
   d.objects = d.objects.filter((o) => TYPE_DEFAULTS[o.type]).map(normalizeObject);
+  withDefaults(d.logic, LOGIC_DEFAULTS);
+  if (!Array.isArray(d.logic.rules)) d.logic.rules = [];
   return d;
 }

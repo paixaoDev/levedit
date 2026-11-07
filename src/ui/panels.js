@@ -1,6 +1,8 @@
 // Painéis: níveis, lista de objetos, opções da ferramenta e propriedades.
 import { el, field, group } from './fields.js';
-import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, makeLevel, normalizeObject, makeObject } from '../model.js';
+import { DECO_TYPES, ASSET_KINDS, AGENT_MODES, BEHAVIORS, ITEM_KINDS, makeLevel, normalizeObject, makeObject } from '../model.js';
+import { GOALS, rulesUsing, describeRule } from '../logic/schema.js';
+import { OBJECT_SCRIPT_EXAMPLES } from '../logic/script.js';
 import { ASSET_ICONS } from '../builders/assets.js';
 import { setByPath } from '../util.js';
 import { objectLevelIds, assetHeight, suggestChildHeight, worldTransform, toParentLocal, withDescendants, wallHeightOf } from '../levels.js';
@@ -11,12 +13,12 @@ import { circleOf, circlePoints } from '../editor/polar.js';
 import { roofFields, lightFields } from './lighting.js';
 import { TOOL_ICONS, UI_ICONS, svgIcon } from './icons.js';
 
-const TYPE_ICON = { corridor: 'corridor', wall: 'wall', area: 'area', connector: 'connector', asset: 'asset', agent: 'agent', light: 'light' };
+const TYPE_ICON = { corridor: 'corridor', wall: 'wall', area: 'area', connector: 'connector', asset: 'asset', agent: 'agent', light: 'light', item: 'item', zone: 'zone' };
 const iconBtn = (icon, tip, onclick, cls = '') => el('button', { class: `icon-btn sm ${cls}`, type: 'button', 'data-tip': tip, 'aria-label': tip, onclick, html: svgIcon(UI_ICONS[icon] || icon) });
 
-const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente', light: 'Luz' };
-const GROUP_ORDER = ['corridor', 'area', 'wall', 'connector', 'asset', 'light', 'agent'];
-const GROUP_LABEL = { corridor: 'Corredores', area: 'Áreas', wall: 'Paredes', connector: 'Escadas e rampas', asset: 'Assets', light: 'Luzes', agent: 'Agentes' };
+const TYPE_LABEL = { corridor: 'Corredor', wall: 'Parede', area: 'Área', connector: 'Conector', asset: 'Asset', agent: 'Agente', light: 'Luz', item: 'Item', zone: 'Zona' };
+const GROUP_ORDER = ['corridor', 'area', 'wall', 'connector', 'asset', 'light', 'agent', 'item', 'zone'];
+const GROUP_LABEL = { corridor: 'Corredores', area: 'Áreas', wall: 'Paredes', connector: 'Escadas e rampas', asset: 'Assets', light: 'Luzes', agent: 'Agentes', item: 'Itens', zone: 'Zonas de gatilho' };
 
 const PARAM_LABELS = {
   speed: 'Velocidade', sprint: 'Mult. corrida', jump: 'Força do pulo', gravity: 'Gravidade', eyeHeight: 'Altura olhos',
@@ -41,7 +43,7 @@ export class Panels {
   constructor(app) {
     this.app = app;
     this.store = app.store;
-    this.closedGroups = new Set(['Decoração', 'Piso', 'Regras procedurais', 'Verticalidade', 'Transformação', 'Junções']);
+    this.closedGroups = new Set(['Decoração', 'Piso', 'Regras procedurais', 'Verticalidade', 'Transformação', 'Junções', 'Script (avançado)']);
     this.closedTypes = new Set();
     this.$levels = document.getElementById('levels');
     this.$outliner = document.getElementById('outliner');
@@ -234,7 +236,78 @@ export class Panels {
       box.append(pal);
     } else if (t === 'light') {
       box.append(...lightFields((f) => field(opt, f, onF), { placing: true }));
+    } else if (t === 'item') {
+      const pal = el('div', { class: 'palette' });
+      const ICON = { key: TOOL_ICONS.item, coin: 'M12 4a8 8 0 1 0 .01 0z M12 8v8', gem: 'M6 9l6-6 6 6-6 12z M6 9h12', health: 'M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z', orb: 'M12 5a7 7 0 1 0 .01 0z' };
+      const COLOR = { key: '#d9a441', coin: '#d9a441', gem: '#6d9bb8', health: '#b56b7a', orb: '#9bb57a' };
+      for (const [k, label] of Object.entries(ITEM_KINDS)) {
+        pal.append(el('button', {
+          type: 'button', class: opt.kind === k ? 'active' : '', title: label,
+          onclick: () => { tools.options.item.color = COLOR[k]; set('kind', k); },
+          html: `<svg viewBox="0 0 24 24"><path d="${ICON[k]}"/></svg><span>${label}</span>`,
+        }));
+      }
+      box.append(pal, field(opt, { key: 'color', label: 'Cor', type: 'color' }, onF),
+        el('p', { class: 'info' }, 'O player pega o item ao encostar. Use regras para decidir o que ele faz (abrir porta, acordar inimigo...).'));
+    } else if (t === 'zone') {
+      box.append(
+        field(opt, { key: 'w', label: 'Largura', type: 'range', min: 0.5, max: 30, step: 0.5 }, onF),
+        field(opt, { key: 'd', label: 'Profundidade', type: 'range', min: 0.5, max: 30, step: 0.5 }, onF),
+        field(opt, { key: 'usable', label: 'Usável (F)', type: 'bool', text: 'alavanca/botão' }, onF),
+        el('p', { class: 'info' }, 'Zonas são invisíveis no jogo. Elas disparam regras quando o player entra, sai ou aperta F dentro delas.'),
+      );
     }
+  }
+
+  /** Abre um grupo do painel de propriedades (ex.: o script do objeto). */
+  openGroup(title) {
+    this.closedGroups.delete(title);
+    this.renderProps();
+    requestAnimationFrame(() => [...this.$props.querySelectorAll('details.group')].find((d) => d.querySelector('summary span')?.textContent === title)?.scrollIntoView({ block: 'nearest' }));
+  }
+
+  /** Regras que usam o objeto + atalho para criar uma nova a partir dele. */
+  logicFields(o) {
+    const doc = this.store.doc;
+    const nameOf = (id) => this.store.get(id)?.name || doc.logic.rules.find((r) => r.id === id)?.name || '?';
+    const used = rulesUsing(doc.logic, o.id);
+    const isEnemy = o.type === 'agent' && o.role === 'enemy';
+    const preset = o.type === 'item' ? { when: { type: 'pickup', target: o.id }, do: [] }
+      : o.type === 'zone' ? { when: { type: o.usable ? 'use' : 'enter', target: o.id }, once: !o.usable, do: [] }
+      : isEnemy ? { when: { type: 'kill', target: o.id }, do: [] }
+      : o.type === 'asset' ? { when: { type: 'start', target: null }, do: [{ type: 'open', target: o.id }] }
+      : { do: [] };
+    const label = o.type === 'item' ? 'Quando pegar este item…' : o.type === 'zone' ? (o.usable ? 'Quando usar esta zona…' : 'Quando entrar nesta zona…') : isEnemy ? 'Quando derrotar este inimigo…' : 'Regra que mexe neste objeto…';
+    return [
+      used.length ? el('ul', { class: 'rule-list' }, ...used.map((r) => el('li', {}, el('button', {
+        class: 'btn ghost small', type: 'button', onclick: () => this.app.logic.open({ tab: 'simple', ruleId: r.id }),
+      }, el('b', {}, r.name), el('span', { class: 'muted' }, describeRule(r, nameOf)))))) : el('p', { class: 'info' }, 'Nenhuma regra usa este objeto ainda.'),
+      el('div', { class: 'props-actions' }, el('button', {
+        class: 'btn small primary', type: 'button',
+        onclick: () => { const r = this.app.logic.addRule({ name: `${o.name}: regra`, ...preset }); this.app.logic.open({ tab: 'simple', ruleId: r.id }); },
+        html: `${svgIcon(UI_ICONS.plus)}<span>${label}</span>`,
+      })),
+    ];
+  }
+
+  /** Script próprio do objeto (modo avançado). */
+  scriptFields(o) {
+    const kind = o.type === 'agent' ? o.role : o.type;
+    const ta = el('textarea', { class: 'code', rows: 9, spellcheck: 'false', 'aria-label': `Script de ${o.name}`, placeholder: "me.on('tick', (_, s) => { ... });" });
+    ta.value = o.script || '';
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); }
+      e.stopPropagation();
+    });
+    ta.addEventListener('change', () => this.change(o.id, 'script', ta.value, true));
+    return [
+      el('p', { class: 'info' }, '"me" é este objeto. Roda isolado só no modo Testar, junto com as regras.'),
+      field(o, { key: 'scriptEnabled', label: 'Ligado', type: 'bool' }, (k, v, f) => this.change(o.id, k, v, f)),
+      ta,
+      el('div', { class: 'props-actions' },
+        el('button', { class: 'btn small', type: 'button', onclick: () => { if (!o.script?.trim() || window.confirm('Trocar o script pelo exemplo?')) { this.change(o.id, 'script', OBJECT_SCRIPT_EXAMPLES[kind] || OBJECT_SCRIPT_EXAMPLES.asset, true); this.renderProps(); } } }, 'Exemplo'),
+        el('button', { class: 'btn small ghost', type: 'button', onclick: () => this.app.logic.open({ tab: 'advanced' }) }, 'Referência da API')),
+    ];
   }
 
   // ------------------------------------------------------------ propriedades
@@ -408,6 +481,11 @@ export class Panels {
         F({ key: 'color', label: 'Cor', type: 'color' }),
         F({ key: 'collider', label: 'Colisão', type: 'bool' }),
       ]));
+      box.append(G('Jogo', [
+        F({ key: 'startState', label: 'No começo', type: 'select', options: { normal: 'Normal', hidden: 'Escondido', open: 'Aberto' }, tip: 'Como o objeto começa no modo Testar; regras abrem, fecham, mostram e escondem' }),
+        ...this.logicFields(o),
+      ]));
+      box.append(G('Script (avançado)', this.scriptFields(o)));
       box.append(G('Andares', this.topFields(o, F)));
       box.append(G('Preso a outro objeto', this.attachFields(o)));
       box.append(G('Transformação', [
@@ -432,6 +510,8 @@ export class Panels {
       if (o.role === 'enemy') {
         g.push(F({ key: 'behavior', label: 'Comportamento', type: 'select', options: BEHAVIORS }));
         g.push(F({ key: 'pathId', label: 'Caminho', type: 'select', options: paths, show: (x) => x.behavior === 'patrol' }));
+        g.push(F({ key: 'guardRadius', label: 'Raio de guarda', type: 'range', min: 2, max: 40, step: 0.5, show: (x) => x.behavior === 'guard' }));
+        g.push(F({ key: 'active', label: 'Acordado', type: 'bool', text: 'desligado: dorme até uma regra despertar' }));
       } else {
         g.push(el('div', { class: 'props-actions' }, el('button', { class: 'btn small primary', onclick: () => this.app.startPlay(o.id), html: `${svgIcon(UI_ICONS.play, 'solid')}<span>Testar com este player</span>` })));
       }
@@ -444,6 +524,33 @@ export class Panels {
           : F({ key: `params.${k}`, label: PARAM_LABELS[k] || k, type: 'number', step: 0.5, min: 0 });
       });
       box.append(G('Gameplay', params));
+      if (o.role === 'enemy') box.append(G('Lógica', this.logicFields(o)));
+      box.append(G('Script (avançado)', this.scriptFields(o)));
+      box.append(G('Transformação', this.transformFields(o, F)));
+    } else if (o.type === 'item') {
+      box.append(meta());
+      box.append(el('div', { class: 'quick' },
+        F({ key: 'kind', label: 'Tipo', type: 'select', options: ITEM_KINDS }),
+        F({ key: 'amount', label: o.kind === 'health' ? 'Vida recuperada' : 'Valor', type: 'number', step: 1, min: 0, show: (x) => x.kind === 'health' || x.kind === 'coin' || x.kind === 'gem' }),
+        F({ key: 'color', label: 'Cor', type: 'color' }),
+        F({ key: 'y', label: 'Altura', type: 'range', min: 0.2, max: 4, step: 0.05 }),
+        F({ key: 'hidden', label: 'Escondido', type: 'bool', text: 'aparece só quando uma regra mostrar' }),
+      ));
+      box.append(G('Lógica', this.logicFields(o)));
+      box.append(G('Script (avançado)', this.scriptFields(o)));
+      box.append(G('Transformação', this.transformFields(o, F)));
+    } else if (o.type === 'zone') {
+      box.append(meta(`${o.w} × ${o.d} m`));
+      box.append(el('div', { class: 'quick' },
+        F({ key: 'w', label: 'Largura', type: 'range', min: 0.5, max: 40, step: 0.5 }),
+        F({ key: 'd', label: 'Profundidade', type: 'range', min: 0.5, max: 40, step: 0.5 }),
+        F({ key: 'h', label: 'Altura', type: 'range', min: 0.5, max: 12, step: 0.5 }),
+        F({ key: 'usable', label: 'Usável (F)', type: 'bool', text: 'mostra o botão Usar' }),
+        F({ key: 'useLabel', label: 'Texto do botão', type: 'text', show: (x) => x.usable }),
+        F({ key: 'color', label: 'Cor no editor', type: 'color' }),
+      ));
+      box.append(G('Lógica', this.logicFields(o)));
+      box.append(G('Script (avançado)', this.scriptFields(o)));
       box.append(G('Transformação', this.transformFields(o, F)));
     }
   }
@@ -485,6 +592,14 @@ export class Panels {
       ),
       touch ? el('p', { class: 'tip-line' }, 'Toque em um objeto para editá-lo · 1 dedo gira a câmera, 2 dedos movem e dão zoom') : el('p', { class: 'tip-line' }, 'Clique em um objeto para editá-lo · ', el('kbd', {}, '?'), ' mostra todos os atalhos'),
     ));
+    const L = doc.logic;
+    const scripts = doc.objects.filter((o) => o.script?.trim()).length + (L.scriptEnabled && L.script?.trim() ? 1 : 0);
+    box.append(el('div', { class: 'callout logic-card' },
+      el('div', { class: 'step-title', html: `${svgIcon(UI_ICONS.logic)}<span>Lógica do jogo</span>` }),
+      el('p', {}, `${GOALS[L.goal.type]?.label || ''} · ${L.rules.length} ${L.rules.length === 1 ? 'regra' : 'regras'}${scripts ? ` · ${scripts} script${scripts > 1 ? 's' : ''}` : ''}`),
+      el('div', { class: 'props-actions' },
+        el('button', { class: 'btn small primary', type: 'button', onclick: () => this.app.logic.open({ tab: 'simple' }), html: `${svgIcon(UI_ICONS.bolt)}<span>Regras (simples)</span>` }),
+        el('button', { class: 'btn small', type: 'button', onclick: () => this.app.logic.open({ tab: 'advanced' }), html: `${svgIcon(UI_ICONS.code)}<span>Script (avançado)</span>` }))));
     const counts = {};
     for (const o of doc.objects) counts[o.type] = (counts[o.type] || 0) + 1;
     const settings = group('Ajustes do level', [
@@ -659,7 +774,7 @@ export class Panels {
     const targets = shared ? this.groupIds(id) : [id];
     const record = !this.gesture;
     this.gesture = !final;
-    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key);
+    const structural = ['name', 'levelId', 'mode', 'behavior', 'kind', 'usable', 'startState', 'hidden', 'active', 'endLevelId', 'rampStyle', 'style', 'deco.type', 'floor.enabled', 'walls.enabled', 'customId', 'roof.enabled', 'shadows', 'topLevelId'].includes(key);
     this.store.mutate((d) => {
       for (const t of d.objects.filter((x) => targets.includes(x.id))) {
         if (key === 'levelId' && t.type === 'connector') {
