@@ -283,6 +283,27 @@ h3 { font-size: 15px; margin: 2px 0 12px; color: var(--ink); font-weight: 600; l
 }
 .coords .mono { min-width: 92px; text-align: right; }
 
+/* gizmo: Mover / Girar / Escalar */
+.gizmo-bar {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 4;
+  display: flex; gap: 2px; padding: 4px;
+  background: rgba(255, 254, 251, 0.94); backdrop-filter: blur(8px);
+  border: 1px solid var(--line-mid); border-radius: 12px; box-shadow: var(--shadow);
+}
+.gizmo-bar[hidden] { display: none; }
+.gizmo-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink-2);
+  font: 600 12px var(--font); cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.gizmo-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.gizmo-btn:hover { background: var(--hover); color: var(--ink); }
+.gizmo-btn.active { background: var(--ink); color: #fff; }
+.gizmo-btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--ink-2); }
+body.playing .gizmo-bar { display: none; }
+body.touch .gizmo-btn { height: 42px; padding: 0 13px; font-size: 13px; }
+body.touch .gizmo-btn svg { width: 20px; height: 20px; }
+
 /* ------------------------------------------------------------ inspector */
 .tool-card { background: var(--paper); }
 .tool-head, .obj-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
@@ -654,6 +675,10 @@ body.touch[data-sheet="props"] .hint-pill, body.touch[data-sheet="scene"] .hint-
   .dock::-webkit-scrollbar { display: none; }
   .view-hint, .coords { display: none; }
   .light-menu { right: 8px !important; top: 8px !important; }
+  /* celular: só ícones, na lateral direita (o alto já tem o dock e a luz) */
+  .gizmo-bar { left: auto; right: 8px; top: 50%; transform: translateY(-50%); flex-direction: column; }
+  .gizmo-btn span { display: none; }
+  .gizmo-btn, body.touch .gizmo-btn { width: 44px; justify-content: center; padding: 0; }
   .hint-pill { left: calc(50% + 30px); max-width: calc(100% - 84px); font-size: 11.5px; padding: 6px 12px; }
   body.touch .hint-pill { max-width: calc(100% - 84px); }
   body.touch .touch-bar { left: calc(50% + 30px); max-width: calc(100% - 80px); }
