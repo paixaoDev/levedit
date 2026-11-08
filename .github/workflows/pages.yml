@@ -1,8 +1,16 @@
 name: Deploy no GitHub Pages
 
+# Único workflow do repo: roda só quando algo entra na main (ou à mão).
+# PRs e commits em outras branches não gastam minutos de Actions.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      - '.github/CODEOWNERS'
   workflow_dispatch:
 
 permissions:
@@ -17,6 +25,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,6 +36,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
