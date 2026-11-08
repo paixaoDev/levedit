@@ -50,7 +50,8 @@ A estrutura de pastas está descrita no [README](README.md#estrutura).
 2. Faça mudanças pequenas e focadas. Uma PR resolve uma coisa só.
 3. Rode os testes (`node --test tests/*.test.mjs`) e teste a mudança no navegador.
 4. Abra a PR para a `main` preenchendo o modelo. Ligue a issue com `Closes #123`.
-5. A PR precisa de **CI verde** e **1 aprovação** do mantenedor para entrar.
+5. A PR precisa de **1 aprovação** do mantenedor para entrar. O GitHub Actions não roda em PRs
+   (para economizar minutos): os testes rodam na `main`, antes do deploy, então rode-os localmente.
    Ela é integrada com *squash merge*, então o título da PR vira a mensagem do commit.
 6. Responda aos comentários da revisão com novos commits na mesma branch (não precisa reescrever o histórico).
 

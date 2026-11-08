@@ -1,6 +1,6 @@
 # levedit
 
-[![CI](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml/badge.svg)](https://github.com/paixaoDev/levedit/actions/workflows/ci.yml)
+[![Deploy](https://github.com/paixaoDev/levedit/actions/workflows/pages.yml/badge.svg)](https://github.com/paixaoDev/levedit/actions/workflows/pages.yml)
 [![Licença: GPL v3](https://img.shields.io/badge/licen%C3%A7a-GPL%20v3-blue.svg)](LICENSE)
 [![PRs bem-vindas](https://img.shields.io/badge/PRs-bem--vindas-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -22,7 +22,8 @@ python3 -m http.server 8000
 
 ### GitHub Pages
 
-O workflow `.github/workflows/pages.yml` publica o site a cada push na `main`.
+O workflow `.github/workflows/pages.yml` roda os testes e publica o site a cada push na `main`
+(mudanças só em `.md` não disparam). PRs e outras branches não rodam Actions.
 Uma vez só: em **Settings → Pages → Build and deployment**, escolha **Source: GitHub Actions**.
 
 ## O que tem
