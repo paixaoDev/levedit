@@ -9,6 +9,8 @@ import { circlePoints, circleOf, polarSources, polarSnap, ringsOf, withArcs, ref
 import { applyVisualState, THEME } from '../render/materials.js';
 import { snap, lerp, smoothstep, deepClone } from '../util.js';
 import { snapTopToLevels, snapVertical, setWallHeight, wallHeightOf, worldTransform, toParentLocal } from '../levels.js';
+import { Gizmo, GIZMO_MODES, rayAxisParam } from './gizmo.js';
+import { captureOrig, moveObjects, rotateObjects, scaleObject } from './transform.js';
 
 const PATH_TYPES = new Set(['corridor', 'wall', 'area']);
 const MOVABLE = new Set(['asset', 'agent', 'connector', 'light', 'item', 'zone']);
@@ -74,11 +76,14 @@ export class Tools extends EventTarget {
     this.multiSelect = false; // "somar à seleção" no celular (equivale ao Shift)
     const mq = window.matchMedia?.('(pointer: coarse)');
     this.coarse = !!mq?.matches;
-    mq?.addEventListener?.('change', (ev) => { this.coarse = ev.matches; });
+    mq?.addEventListener?.('change', (ev) => { this.coarse = ev.matches; this.gizmo.coarse = ev.matches; this.refreshHandles(); });
+    // gizmo de transformação (mover / girar / escalar) sobre a seleção
+    this.gizmo = new Gizmo(vp, store);
+    this.gizmo.coarse = this.coarse;
     this._bind();
     store.addEventListener('selection', () => { this._railCache = null; this.refreshHandles(); });
     store.addEventListener('change', () => { this._guideCache = null; this._railCache = null; this.refreshHandles(); });
-    vp.onFrame.push(() => { this._scaleHandles(); this._animateLinkHint(); });
+    vp.onFrame.push(() => { this._scaleHandles(); this.gizmo.update(); this._animateLinkHint(); if (this.drag?.kind === 'gizmo' || this.drag?.gizmo) this._placeLinkTip(); });
   }
 
   setTool(t) {
@@ -89,7 +94,15 @@ export class Tools extends EventTarget {
     this._clearLinkHint();
     this._clearGuides();
     this.vp.dom.style.cursor = t === 'select' ? 'default' : 'crosshair';
+    this.refreshHandles();
     this.dispatchEvent(new CustomEvent('toolchange', { detail: { tool: t } }));
+  }
+
+  /** Modo do gizmo: 'move', 'rotate' ou 'scale'. */
+  setGizmoMode(m) {
+    if (!GIZMO_MODES[m]) return;
+    this.gizmo.setMode(m);
+    this.dispatchEvent(new CustomEvent('gizmomode', { detail: { mode: m } }));
   }
 
   setOption(tool, key, value) {
@@ -135,6 +148,8 @@ export class Tools extends EventTarget {
     const touch = e.pointerType === 'touch';
 
     if (t === 'select') {
+      const ga = this.gizmo.pick(ndc, touch);
+      if (ga) { this._setControls(false); this._beginGizmo(ga, ndc, e); return; }
       const h = this._pickHandle(ndc, touch);
       if (h) {
         this._setControls(false);
@@ -258,6 +273,9 @@ export class Tools extends EventTarget {
     if (this.drag) { this._doDrag(ndc, e); return; }
     if (this.tool === 'select') {
       this._clearLinkHint();
+      const ga = this.gizmo.pick(ndc);
+      this.gizmo.hover = ga;
+      if (ga) { this.vp.dom.style.cursor = ga === 'ry' ? 'grab' : ga === 'all' ? 'nesw-resize' : 'move'; return; }
       const h = this._pickHandle(ndc);
       const ra = h || e.altKey ? null : this._railAt(ndc);
       if (ra) this._showRailHint(ra);
@@ -308,6 +326,7 @@ export class Tools extends EventTarget {
     if (this.drag) {
       const d = this.drag;
       this.drag = null;
+      if (d.kind === 'gizmo' || d.gizmo) { this.gizmo.active = null; this.gizmo._key = null; this.gizmo.refresh(); }
       // soltou a ponta de um corredor sobre outro: vira ramificação (nó compartilhado)
       if (d.kind === 'point' && d.recorded && d.endName) {
         this.store.mutate((doc) => {
@@ -336,7 +355,9 @@ export class Tools extends EventTarget {
     if (this.tool === 'select') {
       const ndc = this.vp.ndc(e);
       const h = this._pickHandle(ndc, true);
-      if (h) {
+      if (this.gizmo.pick(ndc, true)) {
+        this._pointerDown(e); // gizmo: o dedo arrasta direto (sem segurar)
+      } else if (h) {
         this._pointerDown(e);
         if (h.kind !== 'mid') {
           this._armPress(() => {
@@ -472,6 +493,10 @@ export class Tools extends EventTarget {
     }
     if (e.key === 'Enter' && this.draft) { this.finishDraft(); return true; }
     if (e.key === 'Backspace' && this.draft) { this.undoDraftPoint(); return true; }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      const m = Object.entries(GIZMO_MODES).find(([, v]) => v.key === e.key);
+      if (m) { this.setGizmoMode(m[0]); return true; }
+    }
     return false;
   }
 
@@ -737,6 +762,7 @@ export class Tools extends EventTarget {
   // ---------------------------------------------------------- arraste
   _doDrag(ndc, e) {
     const d = this.drag;
+    if (d.kind === 'gizmo') { this._dragGizmo(ndc, e); return; }
     if (d.kind === 'top') { this._dragTop(ndc, e); return; }
     if (d.kind === 'lift') { this._dragLift(ndc, e); return; }
     const hit = this.vp.groundPoint(ndc, d.y);
@@ -904,7 +930,7 @@ export class Tools extends EventTarget {
 
   _dragTop(ndc, e) {
     const d = this.drag;
-    const y = this._verticalY(ndc, e, d);
+    const y = this._verticalY(ndc, e, d) + (d.dy || 0);
     if (y == null || !isFinite(y)) return;
     const record = !d.recorded;
     d.recorded = true;
@@ -937,7 +963,7 @@ export class Tools extends EventTarget {
   /** Sobe/desce um asset pela base, encaixando nos andares e no topo/base do objeto pai. */
   _dragLift(ndc, e) {
     const d = this.drag;
-    const y = this._verticalY(ndc, e, d);
+    const y = this._verticalY(ndc, e, d) + (d.dy || 0);
     if (y == null || !isFinite(y)) return;
     const record = !d.recorded;
     d.recorded = true;
@@ -960,6 +986,169 @@ export class Tools extends EventTarget {
     this._linkAt = new THREE.Vector3(d.pos.x, res.y, d.pos.z);
     this.linkTip.hidden = false;
     this._placeLinkTip();
+  }
+
+  // ---------------------------------------------------------- gizmo
+  /** Começa a arrastar uma parte do gizmo (eixo, plano, anel ou centro). */
+  _beginGizmo(axis, ndc, e) {
+    const g = this.gizmo;
+    const doc = this.store.doc;
+    const ly = this.vp.ctx.levelY;
+    const mode = g.shown;
+    const single = g.single;
+    g.active = axis;
+    g.hover = null;
+    const pivot = g.pivot.clone();
+    // asset: subir/descer e esticar em Y usam o mesmo encaixe nos andares das alças antigas
+    if (single?.type === 'asset' && axis === 'y') {
+      const go = this.vp.objects.get(single.id);
+      const base = go?.userData.base ?? pivot.y;
+      const height = go?.userData.height ?? 1;
+      const kind = mode === 'scale' ? 'top' : 'lift';
+      const y0 = kind === 'top' ? base + height : base;
+      const d = { kind, gizmo: true, id: single.id, base, unitH: go?.userData.unitHeight ?? 1, height, pos: { x: pivot.x, y: y0, z: pivot.z }, sy: e.clientY, top: y0, recorded: false };
+      d.dy = y0 - this._verticalY(ndc, e, d);
+      if (!isFinite(d.dy)) d.dy = 0;
+      this.drag = d;
+      return;
+    }
+    const d = {
+      kind: 'gizmo', mode, axis, pivot, recorded: false, sx: e.clientX, sy: e.clientY,
+      ids: [...g.ids],
+      origs: g.ids.map((id) => captureOrig(this.store.get(id), doc, ly)),
+    };
+    const ray = this.vp.raycaster(ndc).ray;
+    if (axis === 'x' || axis === 'y' || axis === 'z') {
+      d.dir = g.axisDir(axis);
+      d.unit = g.unit;
+      d.t0 = rayAxisParam(ray, pivot, d.dir);
+      d.screen = this._screenAxis(pivot, d.dir, d.unit);
+      if (d.t0 == null) d.t0 = d.unit;
+    } else if (axis === 'xz' || axis === 'ry') {
+      d.p0 = this.vp.groundPoint(ndc, pivot.y);
+      if (!d.p0) { this.drag = null; g.active = null; return; }
+      d.a0 = Math.atan2(d.p0.z - pivot.z, d.p0.x - pivot.x);
+      d.last = d.a0;
+      d.acc = 0;
+    }
+    this.drag = d;
+  }
+
+  /** Direção do eixo na tela (px por metro), para quando o raio fica paralelo a ele. */
+  _screenAxis(O, dir, unit) {
+    const r = this.vp.dom.getBoundingClientRect();
+    const a = O.clone().project(this.vp.camera), b = O.clone().addScaledVector(dir, unit).project(this.vp.camera);
+    const vx = ((b.x - a.x) * r.width) / 2, vy = (-(b.y - a.y) * r.height) / 2;
+    const len = Math.hypot(vx, vy);
+    return { x: vx / (len || 1), y: vy / (len || 1), perM: len / unit };
+  }
+
+  /** Posição do cursor ao longo do eixo do arraste (metros a partir do centro do gizmo). */
+  _axisT(ndc, e, d) {
+    // Y: segue a seta na tela (o raio contra uma reta vertical exagera com a câmera alta)
+    if (d.axis === 'y' && d.screen.perM >= 1) return d.t0 + ((e.clientX - d.sx) * d.screen.x + (e.clientY - d.sy) * d.screen.y) / d.screen.perM;
+    const t = rayAxisParam(this.vp.raycaster(ndc).ray, d.pivot, d.dir);
+    // olhando o eixo quase de ponta: usa o arraste na tela
+    if (t == null || Math.abs(t - d.t0) > d.unit * 40 || d.screen.perM < 20) {
+      if (d.screen.perM < 1) return d.t0;
+      return d.t0 + ((e.clientX - d.sx) * d.screen.x + (e.clientY - d.sy) * d.screen.y) / d.screen.perM;
+    }
+    return t;
+  }
+
+  _dragGizmo(ndc, e) {
+    const d = this.drag;
+    const doc = this.store.doc;
+    const st = doc.settings;
+    const snapOn = st.snap && !e.altKey;
+    const ly = this.vp.ctx.levelY;
+    let tip = '';
+    let tipAt = d.pivot.clone();
+    const apply = (fn) => {
+      const record = !d.recorded;
+      d.recorded = true;
+      this.store.mutate((dd) => {
+        for (const id of d.ids) { const o = dd.objects.find((x) => x.id === id); if (o?.points) markEdited(dd, o); }
+        fn(dd);
+      }, { ids: d.ids, record });
+    };
+    if (d.mode === 'move') {
+      if (d.axis === 'y') {
+        // item ou luz: altura acima do andar
+        const dy = this._axisT(ndc, e, d) - d.t0;
+        let y = 0;
+        apply((dd) => {
+          const og = d.origs[0];
+          const o = dd.objects.find((x) => x.id === og.id);
+          y = Math.max(0, (og.y || 0) + dy);
+          if (snapOn) y = snap(y, 0.25);
+          o.y = +y.toFixed(3);
+        });
+        tip = `Altura ${y.toFixed(2)} m${snapOn ? '' : ' · livre'}`;
+        tipAt.y = ly(this.store.get(d.ids[0])?.levelId) + y;
+      } else {
+        let dx = 0, dz = 0;
+        if (d.axis === 'xz') {
+          const p = this.vp.groundPoint(ndc, d.pivot.y);
+          if (!p) return;
+          dx = p.x - d.p0.x; dz = p.z - d.p0.z;
+        } else {
+          const t = this._axisT(ndc, e, d) - d.t0;
+          dx = d.axis === 'x' ? t : 0;
+          dz = d.axis === 'z' ? t : 0;
+        }
+        let res;
+        apply((dd) => { res = moveObjects(dd, d.origs, dx, dz, { grid: snapOn ? st.gridSize : 0, levelY: ly }); });
+        const o = d.ids.length === 1 ? this.store.get(d.ids[0]) : null;
+        const w = o && !o.points ? (o.parentId ? worldTransform(o, this.store.doc, ly) : o) : null;
+        tip = w ? `x ${w.x.toFixed(2)} · z ${w.z.toFixed(2)}` : `Δx ${res.dx.toFixed(2)} · Δz ${res.dz.toFixed(2)} m`;
+        tipAt.x += res.dx; tipAt.z += res.dz;
+      }
+    } else if (d.mode === 'rotate') {
+      const p = this.vp.groundPoint(ndc, d.pivot.y);
+      if (!p) return;
+      const a = Math.atan2(p.z - d.pivot.z, p.x - d.pivot.x);
+      let da = a - d.last;
+      if (da > Math.PI) da -= Math.PI * 2;
+      if (da < -Math.PI) da += Math.PI * 2;
+      d.acc += da;
+      d.last = a;
+      let applied = 0;
+      apply((dd) => { applied = rotateObjects(dd, d.origs, d.pivot, -d.acc, { snapOn, levelY: ly }); });
+      this.gizmo.setSweep(d.a0, applied);
+      const o = d.ids.length === 1 ? this.store.get(d.ids[0]) : null;
+      const deg = (r) => Math.round((r * 180) / Math.PI);
+      const now = o && o.rotY != null ? ` · agora ${((deg(o.rotY) % 360) + 360) % 360}°` : '';
+      tip = `Girou ${deg(applied)}°${now}${snapOn ? '' : ' · livre'}`;
+      tipAt = p;
+    } else if (d.mode === 'scale') {
+      let f;
+      if (d.axis === 'all') {
+        f = Math.exp(((e.clientX - d.sx) - (e.clientY - d.sy)) / 160);
+      } else {
+        const t0 = Math.abs(d.t0) < d.unit * 0.2 ? d.unit * Math.sign(d.t0 || 1) : d.t0;
+        f = this._axisT(ndc, e, d) / t0;
+      }
+      f = Math.max(0.02, Math.min(50, f));
+      const fx = d.axis === 'x' || d.axis === 'all' ? f : 1;
+      const fy = d.axis === 'y' || d.axis === 'all' ? f : 1;
+      const fz = d.axis === 'z' || d.axis === 'all' ? f : 1;
+      let res;
+      apply((dd) => { res = scaleObject(dd, d.origs[0], d.pivot, fx, fy, fz, { snapOn }); });
+      this.gizmo.stretch(d.axis, f);
+      const o = this.store.get(d.ids[0]);
+      if (res?.r != null) tip = `Raio ${res.r.toFixed(2)} m`;
+      else if (o?.type === 'asset') tip = `Escala ${o.scale.x.toFixed(2)} × ${o.topLevelId ? 'andar' : o.scale.y.toFixed(2)} × ${o.scale.z.toFixed(2)}`;
+      else if (o?.type === 'zone') tip = `${o.w.toFixed(1)} × ${o.h.toFixed(1)} × ${o.d.toFixed(1)} m`;
+      else tip = d.axis === 'all' ? `× ${f.toFixed(2)}` : `${d.axis.toUpperCase()} × ${f.toFixed(2)}`;
+      if (!snapOn) tip += ' · livre';
+    }
+    this.linkTip.textContent = tip;
+    this.linkTip.classList.remove('join');
+    this._linkAt = tipAt;
+    this.linkTip.hidden = false;
+    this._placeLinkTip();
+    this.dispatchEvent(new CustomEvent('transform'));
   }
 
   _pushAway(doc, o, index, opts) {
@@ -1287,6 +1476,8 @@ export class Tools extends EventTarget {
   // ---------------------------------------------------------- alças
   refreshHandles() {
     this.handles.clear();
+    if (this.tool === 'select' && !this.vp.playing) this.gizmo.refresh();
+    else this.gizmo.hide();
     if (this.vp.playing) return;
     const o = this.store.get(this.store.selection);
     if (o?.type === 'asset' && this.store.multi.size <= 1) { this._assetHandles(o); return; }
@@ -1309,8 +1500,8 @@ export class Tools extends EventTarget {
     const closed = o.type === 'area' || o.closed;
     const circ = circleOf(o);
     if (circ) {
-      // sala circular: centro move, bolinha muda o raio
-      this._addHandle(this.handles, { x: circ.cx, y: y0 + 0.05, z: circ.cz }, 'center', { id: o.id });
+      // sala circular: centro move (o gizmo já faz isso quando aparece), bolinha muda o raio
+      if (!this.gizmo.group.visible) this._addHandle(this.handles, { x: circ.cx, y: y0 + 0.05, z: circ.cz }, 'center', { id: o.id });
       this._addHandle(this.handles, { x: circ.cx + circ.r, y: y0 + 0.05, z: circ.cz }, 'radius', { id: o.id });
       const ring = samplePath(o.points, { closed: true, spacing: 0.5 }).map((p) => new THREE.Vector3(p.x, y0 + 0.06, p.z));
       ring.push(ring[0].clone());
@@ -1380,6 +1571,7 @@ export class Tools extends EventTarget {
     const base = g.userData.base ?? g.position.y;
     const top = base + (g.userData.height ?? 1);
     this._levelRuler(x, z, base, top);
+    if (this.gizmo.group.visible) return; // o gizmo sobe/desce (Mover) e estica (Escalar) com encaixe nos andares
     this._addHandle(this.handles, { x, y: top, z }, 'top', { id: o.id });
     // base: na quina da pegada, para não brigar com a do topo em objetos baixos
     const fp = g.userData.footprint;

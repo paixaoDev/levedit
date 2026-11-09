@@ -31,6 +31,10 @@ export const UI_ICONS = {
   bolt: 'M13 3L5 14h6l-1 7 8-11h-6z',
   code: 'M8 7l-5 5 5 5 M16 7l5 5-5 5 M14 4l-4 16',
   flag: 'M5 21V4 M5 4h11l-2 4 2 4H5',
+  // gizmo: mover, girar, escalar
+  gMove: 'M12 3v18 M3 12h18 M9 6l3-3 3 3 M9 18l3 3 3-3 M6 9l-3 3 3 3 M18 9l3 3-3 3',
+  gRotate: 'M20 12a8 8 0 1 1-2.3-5.7 M20 4v4.5h-4.5 M12 12h.01',
+  gScale: 'M4 10V4h6 M4 4l6 6 M20 14v6h-6 M20 20l-6-6 M14 4h6v6 M10 20H4v-6',
 };
 
 /** SVG inline de um caminho de ícone. */

@@ -5,6 +5,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { Store } from './store.js';
 import { Viewport } from './editor/viewport.js';
 import { Tools, TOOL_INFO } from './editor/tools.js';
+import { GIZMO_MODES } from './editor/gizmo.js';
 import { Panels } from './ui/panels.js';
 import { LightingMenu } from './ui/lighting.js';
 import { LogicDialog } from './ui/logicDialog.js';
@@ -36,6 +37,7 @@ class App {
     this.lightMenu = new LightingMenu(this);
     this.logic = new LogicDialog(this);
     this.buildToolbar();
+    this.buildGizmoBar();
     this.bindTouchUi();
     this.bindTips();
     this.bindUi();
@@ -70,6 +72,52 @@ class App {
       }
       bar.append(box);
     }
+  }
+
+  /** Barra Mover / Girar / Escalar do gizmo (aparece com algo selecionado). */
+  buildGizmoBar() {
+    const bar = document.createElement('div');
+    bar.className = 'gizmo-bar';
+    bar.id = 'gizmo-bar';
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', 'Transformar');
+    bar.hidden = true;
+    const icons = { move: UI_ICONS.gMove, rotate: UI_ICONS.gRotate, scale: UI_ICONS.gScale };
+    for (const [m, info] of Object.entries(GIZMO_MODES)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'gizmo-btn';
+      b.dataset.mode = m;
+      b.dataset.tip = info.label;
+      b.dataset.key = info.key;
+      b.setAttribute('aria-label', `${info.label} (${info.key})`);
+      b.innerHTML = `${svgIcon(icons[m])}<span>${info.label}</span>`;
+      b.addEventListener('click', () => this.tools.setGizmoMode(m));
+      bar.append(b);
+    }
+    document.getElementById('viewport').append(bar);
+    this.tools.addEventListener('gizmomode', () => this.updateChrome());
+    // painel acompanha o arraste do gizmo (no máximo ~8 vezes por segundo)
+    let pending = 0;
+    this.tools.addEventListener('transform', () => {
+      if (pending) return;
+      pending = setTimeout(() => { pending = 0; if (this.tools.drag) this.panels.renderProps(); }, 120);
+    });
+  }
+
+  updateGizmoBar() {
+    const bar = document.getElementById('gizmo-bar');
+    if (!bar) return;
+    const g = this.tools.gizmo;
+    const show = this.tools.tool === 'select' && !!g.caps && !this.play.active;
+    bar.hidden = !show;
+    if (!show) return;
+    bar.querySelectorAll('button').forEach((b) => {
+      const m = b.dataset.mode;
+      b.classList.toggle('active', m === g.shown);
+      b.setAttribute('aria-pressed', String(m === g.shown));
+      b.disabled = !g.supports(m);
+    });
   }
 
   // ------------------------------------------------------------ celular
@@ -276,6 +324,7 @@ class App {
     document.getElementById('sheet-tabs').classList.toggle('has-sel', !!sel);
     this.updateTouchBar();
     document.getElementById('view-hint').textContent = this.vp.view === '3d' ? 'Perspectiva' : 'Planta';
+    this.updateGizmoBar();
   }
 
   /** Dica curta para a pílula no rodapé da cena: ferramenta ativa ou o que dá para fazer com a seleção. */
@@ -283,13 +332,16 @@ class App {
     const t = this.tools.tool;
     if (document.body.classList.contains('touch')) return this.touchHint();
     if (t !== 'select') return TOOL_INFO[t].hint;
-    if (this.store.multi.size > 1) return 'Ctrl+G agrupa e conecta corredores · Del exclui · Esc limpa a seleção';
+    if (this.store.multi.size > 1) return 'Gizmo move e gira todos juntos · Ctrl+G agrupa corredores · Del exclui';
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.hint;
+    const gm = this.tools.gizmo.shown;
+    if (gm === 'rotate') return 'Arraste o anel para girar de 15 em 15° · Alt solta';
+    if (gm === 'scale') return 'Arraste um cubo para esticar · o do centro estica tudo · Alt solta';
     if (o.type === 'corridor') return 'Arraste os quadrados para mover nós · losango cria nó · bolinhas mudam a largura';
     if (o.type === 'area' && o.shape === 'circle') return 'Passe o mouse na parede e clique para puxar uma parede · centro move · bolinha muda o raio';
     if (o.type === 'wall' || o.type === 'area') return 'Passe o mouse na parede e clique para puxar outra · quadrados movem nós · Alt arrasta';
-    return 'Arraste para mover · R gira · Ctrl+D duplica · Del exclui';
+    return 'Arraste as setas ou o quadrado para mover · 1 2 3 trocam o gizmo';
   }
 
   touchHint() {
@@ -300,13 +352,16 @@ class App {
       return TOOL_INFO[t].touch;
     }
     if (this.tools.multiSelect) return 'Toque nos objetos para somar à seleção';
-    if (this.store.multi.size > 1) return 'Vários selecionados · Agrupar fica em Propriedades';
+    if (this.store.multi.size > 1) return 'Vários selecionados · o gizmo move e gira todos juntos';
     const o = this.store.get(this.store.selection);
     if (!o) return TOOL_INFO.select.touch;
+    const gm = this.tools.gizmo.shown;
+    if (gm === 'rotate') return 'Arraste o anel para girar de 15 em 15°';
+    if (gm === 'scale') return 'Arraste um cubo para esticar · o do centro estica tudo';
     if (o.type === 'corridor') return 'Arraste nós e bolinhas · segure um nó para remover, ou o corredor para mover';
     if (o.type === 'area' && o.shape === 'circle') return 'Toque na parede para puxar outra · bolinha muda o raio';
     if (o.type === 'wall' || o.type === 'area') return 'Toque na parede para puxar outra · arraste os nós';
-    return 'Arraste para mover · 2 dedos movem a câmera';
+    return 'Arraste as setas ou o quadrado para mover · 2 dedos movem a câmera';
   }
 
   setView(v) { this.vp.setView(v); this.updateChrome(); this.tools.refreshHandles(); }
